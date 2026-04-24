@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Kolkata ETA Model Documentation</title>
+  <style>
+    :root {
+      --bg: #f5f7fb;
+      --paper: #ffffff;
+      --line: #d7e1ee;
+      --text: #1f2f46;
+      --muted: #5f6f86;
+      --accent: #0f63b4;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", "Helvetica Neue", sans-serif;
+      color: var(--text);
+      background: radial-gradient(circle at top right, #e7effa 0, #f8fbff 40%, #f5f7fb 100%);
+    }
+    .doc {
+      max-width: 1100px;
+      margin: 20px auto;
+      padding: 20px;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      box-shadow: 0 10px 24px rgba(17, 40, 76, 0.08);
+    }
+    h1, h2, h3 { margin: 0 0 10px; }
+    h1 { font-size: 28px; }
+    h2 { margin-top: 20px; font-size: 20px; border-bottom: 1px solid var(--line); padding-bottom: 6px; }
+    p { color: var(--muted); line-height: 1.45; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+    .card {
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      padding: 10px;
+      background: #f9fbff;
+    }
+    .small { font-size: 13px; color: var(--muted); }
+    ul { margin-top: 6px; }
+    img.chart {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      margin-top: 6px;
+    }
+    code {
+      background: #eef4fc;
+      border: 1px solid #d3e3f7;
+      padding: 2px 5px;
+      border-radius: 4px;
+      font-family: Consolas, monospace;
+      font-size: 12px;
+    }
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      font-size: 13px;
+      margin-top: 6px;
+    }
+    th, td {
+      border: 1px solid var(--line);
+      padding: 6px;
+      text-align: left;
+    }
+    .pill {
+      display: inline-block;
+      border-radius: 999px;
+      padding: 3px 8px;
+      background: #e8f1ff;
+      border: 1px solid #cfe1fb;
+      margin-right: 6px;
+      margin-bottom: 4px;
+      font-size: 12px;
+    }
+    @media (max-width: 900px) {
+      .grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <article class="doc">
+    <h1>Kolkata Bus ETA Model Documentation</h1>
+    <p>This page documents data collection, cleaning, snapping, feature engineering, model selection, training outputs, and deployment usage.</p>
+
+    <section>
+      <h2>1) Project Summary</h2>
+      <div id="summaryBox" class="card small">Loading summary...</div>
+      <p class="small">Model artifact file: <code>model_outputs/eta_model.joblib</code> (this is the trained model bundle).</p>
+    </section>
+
+    <section>
+      <h2>2) Data Collection and Route Baselines</h2>
+      <div id="datasetBox" class="card small">Loading dataset metadata...</div>
+      <p class="small">Golden baseline sessions currently enforced: morning Home-to-Office => 43, evening Office-to-Home => 35.</p>
+    </section>
+
+    <section>
+      <h2>3) CSV Schema and Column Meaning</h2>
+      <div class="grid">
+        <div class="card">
+          <h3>Raw CSV Columns</h3>
+          <div id="columnsRaw" class="small">Loading...</div>
+        </div>
+        <div class="card">
+          <h3>Training Features Used</h3>
+          <div id="columnsUsed" class="small">Loading...</div>
+        </div>
+      </div>
+      <div class="card" style="margin-top:10px;">
+        <h3>Rejected or Non-training Fields</h3>
+        <div id="columnsRejected" class="small">Loading...</div>
+      </div>
+    </section>
+
+    <section>
+      <h2>4) Data Cleaning and Snapping Strategy</h2>
+      <p>
+        GPS points are cleaned and snapped onto route baselines to reduce apparent off-road jumps. The latest snapping is sequence-aware and elastic:
+        nearest projection to baseline polyline + monotonic progress enforcement + stretch/compress redistribution to avoid greedy clumping and teleport-like skips on diverge/converge route segments.
+      </p>
+      <p class="small">Output snapped dataset folder: <code>csv_snapped</code></p>
+    </section>
+
+    <section>
+      <h2>5) Partial Session Handling</h2>
+      <p>
+        Sessions with incomplete route coverage are retained. The observed section contributes directly, while missing bins are imputed from weighted route profiles built across sessions.
+        This allows training on both full and partial tracks without discarding useful signal.
+      </p>
+    </section>
+
+    <section>
+      <h2>6) Model Selection and Metrics</h2>
+      <div id="metricsTable" class="card small">Loading model metrics...</div>
+      <p class="small">Compared models include Random Forest, Hist Gradient Boosting, and XGBoost.</p>
+
+      <div class="grid">
+        <div class="card">
+          <h3>Error Comparison (MAE / RMSE)</h3>
+          <img class="chart" src="model_outputs/training_metrics.png" alt="Training metrics chart">
+        </div>
+        <div class="card">
+          <h3>Predicted vs Actual</h3>
+          <img class="chart" src="model_outputs/pred_vs_actual.png" alt="Predicted vs actual chart">
+        </div>
+      </div>
+      <div class="card" style="margin-top:10px;">
+        <h3>XGBoost Learning Curve</h3>
+        <img class="chart" src="model_outputs/xgboost_learning_curve.png" alt="XGBoost learning curve">
+      </div>
+    </section>
+
+    <section>
+      <h2>7) Training Parameters</h2>
+      <div class="card small">
+        <ul>
+          <li>Route references: morning=43, evening=35</li>
+          <li>Bin size: 120 meters</li>
+          <li>Group-aware split by session ID</li>
+          <li>Features: route type, vehicle class, time-of-day, weekday, route progress, off-route distance, local/global speed context, support count</li>
+          <li>Target: ETA remaining minutes</li>
+        </ul>
+      </div>
+    </section>
+
+    <section>
+      <h2>8) Deployed Usage</h2>
+      <p>Use the deployed app at <a href="eta_model_app.html">eta_model_app.html</a>.</p>
+      <div class="card small">
+        <ol>
+          <li>Choose route (morning/evening) and start time.</li>
+          <li>Click a geographic point on the baseline polyline.</li>
+          <li>Run prediction to get ETA and expected arrival time.</li>
+          <li>Inspect choke points colored by congestion (green/yellow/red).</li>
+        </ol>
+      </div>
+    </section>
+
+    <section>
+      <h2>9) Limitations and Edge Cases</h2>
+      <div class="card small">
+        <ul>
+          <li>Small dataset size may limit generalization stability.</li>
+          <li>Traffic changes by day/event/weather are not explicitly modeled yet.</li>
+          <li>Snapped baselines simplify geometry, which improves consistency but can suppress true detour behavior.</li>
+        </ul>
+      </div>
+    </section>
+  </article>
+
+  <script>
+    function asPills(items) {
+      if (!Array.isArray(items) || items.length === 0) return "None";
+      return items.map((x) => `<span class=\"pill\">${String(x)}</span>`).join("");
+    }
+
+    async function loadDocData() {
+      const [summaryRes, datasetRes] = await Promise.all([
+        fetch('/api/model-summary'),
+        fetch('/api/dataset-info')
+      ]);
+
+      const summary = await summaryRes.json();
+      const dataset = await datasetRes.json();
+
+      const summaryBox = document.getElementById('summaryBox');
+      summaryBox.innerHTML = [
+        `<b>Sessions used:</b> ${summary.sessions_used}`,
+        `<b>Morning / Evening:</b> ${summary.morning_sessions} / ${summary.evening_sessions}`,
+        `<b>Best model:</b> ${summary.best_model}`,
+        `<b>Morning baseline:</b> ${summary.morning_reference}`,
+        `<b>Evening baseline:</b> ${summary.evening_reference}`
+      ].join('<br>');
+
+      const datasetBox = document.getElementById('datasetBox');
+      datasetBox.innerHTML = [
+        `<b>Collected counts:</b> morning=${dataset.collected_counts.morning}, evening=${dataset.collected_counts.evening}`,
+        `<b>Original files:</b> ${dataset.file_counts.original_csv_files}`,
+        `<b>Snapped files:</b> ${dataset.file_counts.snapped_csv_files}`,
+        `<b>Baselines:</b> morning=${dataset.baseline_sessions.morning_home_to_office}, evening=${dataset.baseline_sessions.evening_office_to_home}`
+      ].join('<br>');
+
+      document.getElementById('columnsRaw').innerHTML = asPills(dataset.csv_columns);
+      document.getElementById('columnsUsed').innerHTML = asPills(dataset.extracted_features_for_training);
+      document.getElementById('columnsRejected').innerHTML = asPills(dataset.rejected_or_non_training_fields);
+
+      const metricsTable = document.getElementById('metricsTable');
+      const metrics = Array.isArray(summary.metrics) ? summary.metrics : [];
+      const rows = metrics.map((m) =>
+        `<tr><td>${m.model}</td><td>${Number(m.mae_min).toFixed(3)}</td><td>${Number(m.rmse_min).toFixed(3)}</td><td>${Number(m.r2).toFixed(3)}</td></tr>`
+      ).join('');
+      metricsTable.innerHTML = `
+        <table>
+          <thead><tr><th>Model</th><th>MAE (min)</th><th>RMSE (min)</th><th>R2</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      `;
+    }
+
+    loadDocData().catch((err) => {
+      console.error(err);
+      document.getElementById('summaryBox').textContent = 'Failed to load model summary.';
+    });
+  </script>
+</body>
+</html>
