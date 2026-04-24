@@ -1,0 +1,280 @@
+:root {
+  --bg: #f3f5f7;
+  --panel: #ffffff;
+  --border: #bfc6d1;
+  --header1: #f9fafc;
+  --header2: #d8e0ec;
+  --text: #1f2933;
+  --muted: #5f6b7a;
+  --blue: #2d5b9a;
+  --danger: #a43a3a;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: Tahoma, Verdana, sans-serif;
+  font-size: 13px;
+  color: var(--text);
+  background: linear-gradient(#e9edf3, #f9fbfd);
+}
+
+.topbar {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(var(--header1), var(--header2));
+}
+
+.topbar h1 {
+  margin: 0;
+  font-size: 17px;
+  color: #34425a;
+}
+
+.hint {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: 370px 1fr;
+  height: calc(100vh - 58px);
+}
+
+.sidebar {
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  padding: 8px;
+  background: #eef2f7;
+}
+
+.panel {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  margin-bottom: 8px;
+}
+
+.panel h2 {
+  margin: 0;
+  padding: 6px 8px;
+  background: linear-gradient(var(--header1), var(--header2));
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  color: #31445f;
+}
+
+.toolbar,
+.field-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 8px;
+  flex-wrap: wrap;
+}
+
+button,
+select,
+input[type="number"] {
+  font: inherit;
+  border: 1px solid #9ca8ba;
+  background: #fff;
+  padding: 4px 6px;
+}
+
+select,
+input[type="number"] {
+  min-width: 120px;
+}
+
+button {
+  background: linear-gradient(#fefefe, #e4e9f1);
+  cursor: pointer;
+}
+
+button:hover {
+  border-color: #6f819b;
+}
+
+.badge {
+  display: inline-block;
+  border: 1px solid #9ca8ba;
+  padding: 2px 6px;
+  background: #f3f7fd;
+  color: #425a7a;
+  font-size: 11px;
+}
+
+.badge.active {
+  background: #ffeec7;
+  border-color: #c09a3f;
+  color: #704f09;
+}
+
+.meta {
+  padding: 8px;
+  line-height: 1.5;
+}
+
+.meta-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.meta-table td {
+  border: 1px solid #d5dbe5;
+  padding: 4px 6px;
+  vertical-align: top;
+}
+
+.meta-table td:first-child {
+  width: 36%;
+  color: #4a5c74;
+  background: #f8fafc;
+}
+
+.meta table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.meta table td {
+  border: 1px solid #d5dbe5;
+  padding: 4px 6px;
+}
+
+.meta table td:first-child {
+  width: 44%;
+  background: #f8fafc;
+  color: #475a74;
+}
+
+.small-note {
+  margin: 0;
+  padding: 0 8px 8px;
+  color: var(--muted);
+}
+
+.traffic-legend-wrap {
+  padding: 8px;
+}
+
+.traffic-legend-bar {
+  height: 10px;
+  border: 1px solid #9ba8ba;
+  background: linear-gradient(90deg, #c62525 0%, #d9701b 35%, #ddb327 60%, #7abf2f 100%);
+}
+
+.traffic-legend-labels {
+  margin-top: 4px;
+  display: flex;
+  justify-content: space-between;
+  color: #495b74;
+  font-size: 11px;
+}
+
+.session-list {
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.session-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  border-bottom: 1px solid #dfe5ee;
+  padding: 6px 8px;
+  background: #fff;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.session-item:hover {
+  background: #eef5ff;
+}
+
+.session-item.active {
+  background: #d9e9ff;
+  color: #1f3965;
+  font-weight: bold;
+}
+
+.session-item .session-sub {
+  display: block;
+  color: var(--muted);
+  font-weight: normal;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.map-wrap {
+  position: relative;
+}
+
+.route-waypoint-icon span {
+  display: block;
+  width: 12px;
+  height: 12px;
+  border: 2px solid #182c4f;
+  background: #fefefe;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.7);
+}
+
+.map-wrap.mode-erase #map {
+  cursor: crosshair;
+}
+
+.map-wrap.mode-seed #map {
+  cursor: copy;
+}
+
+.map-wrap.mode-erase.mode-seed #map {
+  cursor: cell;
+}
+
+.map-mode {
+  position: absolute;
+  right: 10px;
+  top: 10px;
+  z-index: 600;
+  border: 1px solid #8698b1;
+  background: rgba(255, 255, 255, 0.94);
+  color: #334867;
+  padding: 4px 7px;
+  font-size: 12px;
+}
+
+#map {
+  width: 100%;
+  height: 100%;
+}
+
+.status {
+  padding: 8px;
+  min-height: 48px;
+  line-height: 1.4;
+}
+
+.status.warn {
+  color: var(--danger);
+}
+
+@media (max-width: 1024px) {
+  .layout {
+    grid-template-columns: 1fr;
+    grid-template-rows: 55vh 45vh;
+  }
+
+  .sidebar {
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+}

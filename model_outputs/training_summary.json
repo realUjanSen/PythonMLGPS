@@ -1,0 +1,67 @@
+{
+  "sessions_used": 23,
+  "morning_sessions": 13,
+  "evening_sessions": 10,
+  "morning_reference": "session_043_20260424_081539_Home_to_Office_snapped.csv",
+  "evening_reference": "session_035_20260420_165549_Office_to_Home_snapped.csv",
+  "best_model": "xgboost",
+  "metrics": [
+    {
+      "model": "xgboost",
+      "mae_min": 24.732977869426016,
+      "rmse_min": 30.331756495877155,
+      "r2": -0.14819125876016193
+    },
+    {
+      "model": "hist_gradient_boosting",
+      "mae_min": 25.831689789286003,
+      "rmse_min": 32.539354476491965,
+      "r2": -0.3214081489940941
+    },
+    {
+      "model": "random_forest",
+      "mae_min": 28.383871899693286,
+      "rmse_min": 38.226216527110246,
+      "r2": -0.8236510691027588
+    }
+  ],
+  "baseline_test_metrics": [
+    {
+      "model": "xgboost",
+      "mae_min": 23.53760609504255,
+      "rmse_min": 31.095268045839944,
+      "r2": 0.03168926134730454,
+      "rows": 1880
+    },
+    {
+      "model": "hist_gradient_boosting",
+      "mae_min": 26.288115934099164,
+      "rmse_min": 35.46331364444741,
+      "r2": -0.2594611183642279,
+      "rows": 1880
+    },
+    {
+      "model": "random_forest",
+      "mae_min": 33.199718156188375,
+      "rmse_min": 48.196370031537114,
+      "r2": -1.3262414968071323,
+      "rows": 1880
+    }
+  ],
+  "outputs": {
+    "model": "model_outputs/eta_model.joblib",
+    "metrics_csv": "model_outputs/model_metrics.csv",
+    "baseline_metrics_csv": "model_outputs/baseline_test_metrics.csv",
+    "training_table_csv": "model_outputs/training_table.csv",
+    "completed_sessions_csv": "model_outputs/sessions_completed_with_imputation.csv",
+    "choke_points_csv": "model_outputs/choke_points.csv",
+    "profile_morning_csv": "model_outputs/route_profile_morning.csv",
+    "profile_evening_csv": "model_outputs/route_profile_evening.csv",
+    "training_plots": [
+      "model_outputs/training_metrics.png",
+      "model_outputs/pred_vs_actual.png",
+      "model_outputs/xgboost_learning_curve.png"
+    ],
+    "snapped_csv_dir": "csv_snapped"
+  }
+}

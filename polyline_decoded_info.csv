@@ -1,0 +1,3 @@
+entry_id,field_name,encoded_length,decoded_points,start_lat,start_lng,end_lat,end_lng
+20,polyline_till_dropoff,4911,2301,22.51021,88.30549,22.58911,88.48445000000001
+20,polyline_till_pickup,1359,600,22.51021,88.30549,22.52127,88.36914

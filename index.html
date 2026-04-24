@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GPS Session Cleaner</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <h1>GPS Session Cleaner</h1>
+    <div class="hint">phpMyAdmin style route inspector</div>
+  </header>
+
+  <main class="layout">
+    <aside class="sidebar">
+      <section class="panel">
+        <h2>Session List</h2>
+        <div class="toolbar">
+          <button id="reloadBtn" type="button">Reload CSV</button>
+          <label for="csvSourceSelect">Dataset</label>
+          <select id="csvSourceSelect">
+            <option value="original">Original CSV</option>
+            <option value="snapped">Snapped CSV</option>
+          </select>
+          <input id="filePicker" type="file" accept=".csv" multiple>
+          <label><input id="showAllToggle" type="checkbox" checked> Show all routes</label>
+          <button id="deleteSessionBtn" type="button">Delete selected session</button>
+        </div>
+        <div id="sessionList" class="session-list"></div>
+      </section>
+
+      <section class="panel">
+        <h2>Selected Session</h2>
+        <div id="sessionMeta" class="meta">No session selected.</div>
+        <div class="field-row">
+          <label for="classSelect">Vehicle Class</label>
+          <select id="classSelect">
+            <option value="">Unclassified</option>
+            <option value="Public Bus">Public Bus</option>
+            <option value="Shuttle">Shuttle</option>
+          </select>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Eraser</h2>
+        <div class="field-row">
+          <label><input id="eraserMode" type="checkbox"> Enable eraser mode</label>
+          <span id="eraserBadge" class="badge">ERASER OFF</span>
+        </div>
+        <div class="field-row">
+          <label><input id="zoomLockToggle" type="checkbox"> Lock zoom (scroll to pan)</label>
+        </div>
+        <div class="field-row">
+          <label><input id="pointInspectorMode" type="checkbox"> Enable point inspector</label>
+        </div>
+        <div class="field-row">
+          <label for="eraserRadius">Brush size: <span id="radiusValue">25</span>m</label>
+          <input id="eraserRadius" type="range" min="2" max="500" value="25">
+        </div>
+        <div class="field-row">
+          <label for="eraserChunk">Min chunk points</label>
+          <input id="eraserChunk" type="number" min="1" max="50" value="6">
+        </div>
+        <div class="field-row">
+          <label><input id="eraseAllVisible" type="checkbox" checked> Erase across all visible sessions</label>
+        </div>
+        <div class="toolbar">
+          <button id="undoBtn" type="button">Undo</button>
+          <button id="resetBtn" type="button">Reset session</button>
+          <button id="saveCleanedBtn" type="button">Save cleaned CSV</button>
+          <button id="downloadBtn" type="button">Download cleaned CSV</button>
+        </div>
+        <p class="small-note">Click or hold-drag on the map in eraser mode to erase points. Middle-click and drag to pan around the map. Turn on Point Inspector and click near a route point to identify which session it belongs to.</p>
+      </section>
+
+      <section class="panel">
+        <h2>Traffic & ETA</h2>
+        <div class="field-row">
+          <label><input id="showTrafficToggle" type="checkbox" checked> Show traffic gradient</label>
+        </div>
+        <div class="field-row">
+          <label for="trafficThreshold">Red threshold: <span id="thresholdValue">65%</span></label>
+          <input id="trafficThreshold" type="range" min="20" max="95" step="1" value="65">
+        </div>
+        <div class="traffic-legend-wrap">
+          <div class="traffic-legend-bar"></div>
+          <div class="traffic-legend-labels">
+            <span>High Traffic</span>
+            <span>Medium</span>
+            <span>Free Flow</span>
+          </div>
+        </div>
+        <div id="trafficStats" class="meta">Select a session to compute speed, distance, congestion, and ETA.</div>
+      </section>
+
+      <section class="panel">
+        <h2>Status</h2>
+        <div id="statusBox" class="status">Ready.</div>
+      </section>
+    </aside>
+
+    <section class="map-wrap">
+      <div id="mapModeIndicator" class="map-mode">Normal mode</div>
+      <div id="map"></div>
+    </section>
+  </main>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <script src="app.js"></script>
+</body>
+</html>

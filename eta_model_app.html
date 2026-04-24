@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ETA Model Deployed App</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
+  <link rel="stylesheet" href="eta_model_app.css">
+</head>
+<body>
+  <header class="topbar">
+    <h1>ETA Model Deployed App</h1>
+    <div class="sub">Snapped baseline routing • session 043 morning • session 035 evening</div>
+  </header>
+
+  <main class="layout">
+    <aside class="panel controls">
+      <h2>Query</h2>
+      <label for="routeSelect">Route</label>
+      <select id="routeSelect">
+        <option value="morning">Morning (Home to Office)</option>
+        <option value="evening">Evening (Office to Home)</option>
+      </select>
+
+      <label for="vehicleSelect">Vehicle Class</label>
+      <select id="vehicleSelect">
+        <option value="Shuttle">Shuttle</option>
+        <option value="Public Bus">Public Bus</option>
+      </select>
+
+      <label for="startTime">Start Time (HH:MM)</label>
+      <input id="startTime" type="time" value="08:15">
+
+      <button id="predictBtn" type="button">Predict ETA From Selected Point</button>
+      <button id="clearPointBtn" type="button">Clear Point</button>
+
+      <div id="resultBox" class="result">Click a point on the map to set your current location on baseline.</div>
+
+      <h3>Traffic Legend</h3>
+      <div class="legend">
+        <span><i class="swatch green"></i> Low congestion</span>
+        <span><i class="swatch yellow"></i> Medium congestion</span>
+        <span><i class="swatch red"></i> High congestion</span>
+      </div>
+
+      <h3>Choke Points Ahead</h3>
+      <div id="chokeList" class="choke-list">No prediction yet.</div>
+    </aside>
+
+    <section class="panel map-wrap">
+      <div id="map"></div>
+      <div id="statusBar" class="status">Loading baseline profile...</div>
+    </section>
+  </main>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <script src="eta_model_app.js"></script>
+</body>
+</html>
