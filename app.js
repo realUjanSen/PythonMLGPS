@@ -933,18 +933,21 @@ function deleteRowsByCsvIndices(session, csvRowIndicesToDelete) {
 }
 
 function getEraseTargetSessions() {
-  const selected = getSelectedSession();
-  if (!selected) return [];
-
   const eraseAllVisible = Boolean($("eraseAllVisible")?.checked);
-  if (!eraseAllVisible || !state.showAll) {
-    return [selected];
+  const visibleSessions = state.showAll
+    ? state.sessions
+    : state.sessions.filter((session) => session.id === state.selectedId);
+
+  if (eraseAllVisible && state.showAll) {
+    return visibleSessions.filter((session) => getSegments(session).length > 0);
   }
 
-  return state.sessions.filter((session) => {
-    const segments = getSegments(session);
-    return segments.length > 0;
-  });
+  const selected = getSelectedSession();
+  if (!selected) {
+    return [];
+  }
+
+  return [selected];
 }
 
 function clearInspectorMarker() {
@@ -1078,7 +1081,11 @@ function removeEraserPreview() {
 function eraseAround(latlng, options = {}) {
   const targets = getEraseTargetSessions();
   if (targets.length === 0) {
-    setStatus("Select a session before erasing.", true);
+    if (Boolean($("eraseAllVisible")?.checked) && state.showAll) {
+      setStatus("No visible sessions available to erase.", true);
+    } else {
+      setStatus("Select a session before erasing.", true);
+    }
     return;
   }
 
@@ -1264,17 +1271,22 @@ function setRouteLabVisibility(visible) {
 }
 
 function saveCleanedSession() {
-  const session = getSelectedSession();
-  if (!session) {
-    setStatus("Select a session before saving.", true);
-    return;
-  }
-
   try {
     const cleanedSessions = JSON.parse(localStorage.getItem(getCleanedSessionsKey()) || "{}");
 
     const saveAllVisible = Boolean($("eraseAllVisible")?.checked) && state.showAll;
-    const targets = saveAllVisible ? state.sessions : [session];
+    const selected = getSelectedSession();
+    const targets = saveAllVisible
+      ? state.sessions.filter((session) => getSegments(session).length > 0)
+      : (selected ? [selected] : []);
+
+    if (targets.length === 0) {
+      setStatus(saveAllVisible
+        ? "No visible sessions available to save."
+        : "Select a session before saving.", true);
+      return;
+    }
+
     targets.forEach((target) => {
       cleanedSessions[target.fileName] = {
         headers: target.headers,
@@ -1296,7 +1308,7 @@ function saveCleanedSession() {
     if (targets.length > 1) {
       setStatus(`Saved cleaned CSV data for ${targets.length} visible sessions. Data persists across refreshes${pruneMsg}.`);
     } else {
-      setStatus(`Cleaned CSV saved for ${session.fileName}. Data persists across page refreshes${pruneMsg}.`);
+      setStatus(`Cleaned CSV saved for ${targets[0].fileName}. Data persists across page refreshes${pruneMsg}.`);
     }
   } catch (err) {
     setStatus(`Error saving: ${err.message}`, true);
