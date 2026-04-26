@@ -10,7 +10,7 @@
 <body>
   <header class="topbar">
     <h1>GPS Session Cleaner</h1>
-    <div class="hint">phpMyAdmin style route inspector</div>
+    <div id="nodeStatus" class="node-status checking">Node: Checking...</div>
   </header>
 
   <main class="layout">
@@ -85,6 +85,13 @@
       </section>
 
       <section class="panel">
+        <h2>Advanced Panels</h2>
+        <div class="field-row">
+          <label><input id="showRouteLabToggle" type="checkbox"> Show Route Lab</label>
+        </div>
+      </section>
+
+      <section id="routeLabPanel" class="panel is-hidden">
         <h2>Route Lab</h2>
         <div class="field-row">
           <label for="routeVariantSelect">Route Variant</label>

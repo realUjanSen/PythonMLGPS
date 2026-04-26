@@ -81,6 +81,30 @@ async function getCsvFileList(source = "original") {
   }
 }
 
+async function refreshNodeStatus() {
+  const badge = $("nodeStatus");
+  if (!badge) return;
+
+  badge.textContent = "Node: Checking...";
+  badge.classList.remove("online", "offline");
+  badge.classList.add("checking");
+
+  try {
+    const response = await fetch("/api/list-csv-files?source=original", { cache: "no-store" });
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    badge.textContent = "Node: Online";
+    badge.classList.remove("checking", "offline");
+    badge.classList.add("online");
+  } catch (error) {
+    badge.textContent = "Node: Offline";
+    badge.classList.remove("checking", "online");
+    badge.classList.add("offline");
+  }
+}
+
 function setStatus(message, isWarn = false) {
   const box = $("statusBox");
   if (!box) return;
@@ -1203,6 +1227,42 @@ function getCleanedSessionsKey() {
   return "cleanedSessions_v1";
 }
 
+function isQuotaExceededError(err) {
+  if (!err) return false;
+  return err.name === "QuotaExceededError" || err.code === 22 || /quota/i.test(String(err.message || ""));
+}
+
+function persistCleanedSessionsWithPrune(cleanedSessions) {
+  const key = getCleanedSessionsKey();
+  let working = { ...cleanedSessions };
+
+  while (true) {
+    try {
+      localStorage.setItem(key, JSON.stringify(working));
+      return { ok: true, pruned: cleanedSessions && Object.keys(cleanedSessions).length - Object.keys(working).length };
+    } catch (err) {
+      if (!isQuotaExceededError(err)) {
+        return { ok: false, error: err, pruned: 0 };
+      }
+
+      const entries = Object.entries(working);
+      if (entries.length <= 1) {
+        return { ok: false, error: err, pruned: 0, quota: true };
+      }
+
+      entries.sort((a, b) => (Number(a[1]?.timestamp) || 0) - (Number(b[1]?.timestamp) || 0));
+      const [oldestKey] = entries[0];
+      delete working[oldestKey];
+    }
+  }
+}
+
+function setRouteLabVisibility(visible) {
+  const panel = $("routeLabPanel");
+  if (!panel) return;
+  panel.classList.toggle("is-hidden", !visible);
+}
+
 function saveCleanedSession() {
   const session = getSelectedSession();
   if (!session) {
@@ -1223,11 +1283,20 @@ function saveCleanedSession() {
       };
     });
 
-    localStorage.setItem(getCleanedSessionsKey(), JSON.stringify(cleanedSessions));
+    const saveResult = persistCleanedSessionsWithPrune(cleanedSessions);
+    if (!saveResult.ok) {
+      if (saveResult.quota) {
+        setStatus("Error saving: browser storage is full for cleanedSessions_v1. Use Download cleaned CSV, or save fewer sessions at once.", true);
+        return;
+      }
+      throw saveResult.error;
+    }
+
+    const pruneMsg = saveResult.pruned > 0 ? ` (pruned ${saveResult.pruned} older saved session(s) due to storage limit)` : "";
     if (targets.length > 1) {
-      setStatus(`Saved cleaned CSV data for ${targets.length} visible sessions. Data persists across refreshes.`);
+      setStatus(`Saved cleaned CSV data for ${targets.length} visible sessions. Data persists across refreshes${pruneMsg}.`);
     } else {
-      setStatus(`Cleaned CSV saved for ${session.fileName}. Data persists across page refreshes.`);
+      setStatus(`Cleaned CSV saved for ${session.fileName}. Data persists across page refreshes${pruneMsg}.`);
     }
   } catch (err) {
     setStatus(`Error saving: ${err.message}`, true);
@@ -1811,6 +1880,10 @@ function wireEvents() {
     renderMap();
   });
 
+  $("showRouteLabToggle")?.addEventListener("change", (e) => {
+    setRouteLabVisibility(Boolean(e.target.checked));
+  });
+
   $("waypointEditMode")?.addEventListener("change", (e) => {
     state.waypointEditMode = e.target.checked;
     if (!state.waypointEditMode) {
@@ -1875,6 +1948,12 @@ async function bootstrap() {
     showVariantsToggle.checked = state.showVariants;
   }
 
+  const showRouteLabToggle = $("showRouteLabToggle");
+  if (showRouteLabToggle) {
+    showRouteLabToggle.checked = false;
+  }
+  setRouteLabVisibility(false);
+
   const showTrafficToggle = $("showTrafficToggle");
   if (showTrafficToggle) {
     showTrafficToggle.checked = state.showTraffic;
@@ -1900,6 +1979,8 @@ async function bootstrap() {
   wireEvents();
   updateModeIndicators();
   renderRouteStats();
+  refreshNodeStatus();
+  setInterval(refreshNodeStatus, 15000);
   loadSessions();
 }
 
