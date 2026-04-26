@@ -125,6 +125,46 @@ def cumulative_lengths(xy: np.ndarray) -> np.ndarray:
     return np.concatenate([[0.0], np.cumsum(steps)])
 
 
+def rolling_median(values: np.ndarray, window: int = 7) -> np.ndarray:
+    if len(values) == 0:
+        return values
+    window = max(3, int(window) | 1)
+    half = window // 2
+    out = np.empty_like(values, dtype=float)
+    for i in range(len(values)):
+        lo = max(0, i - half)
+        hi = min(len(values), i + half + 1)
+        out[i] = float(np.median(values[lo:hi]))
+    return out
+
+
+def elastic_progress_assignment(raw_along: np.ndarray, raw_dist: np.ndarray, total_m: float) -> np.ndarray:
+    if len(raw_along) == 0:
+        return raw_along
+
+    smooth = rolling_median(raw_along, window=9)
+    smooth = np.maximum.accumulate(smooth)
+
+    q05 = float(np.quantile(smooth, 0.05))
+    q95 = float(np.quantile(smooth, 0.95))
+    if q95 - q05 < max(30.0, total_m * 0.05):
+        q05 = float(np.min(smooth))
+        q95 = float(np.max(smooth))
+    q05 = max(0.0, min(q05, total_m))
+    q95 = max(q05, min(q95, total_m))
+
+    # Rank-line maps long detours back onto baseline without introducing teleport jumps.
+    rank_line = np.linspace(q05, q95, len(smooth))
+
+    # Lower-confidence points (farther from baseline) rely more on rank-based compression.
+    conf = np.exp(-np.clip(raw_dist, 0.0, 120.0) / 25.0)
+    blended = conf * smooth + (1.0 - conf) * rank_line
+
+    blended = np.maximum.accumulate(blended)
+    blended = np.clip(blended, 0.0, total_m)
+    return blended
+
+
 def project_point_to_polyline(point_xy: np.ndarray, line_xy: np.ndarray, cum_m: np.ndarray) -> tuple[float, float, np.ndarray]:
     best_dist = float("inf")
     best_along = 0.0
@@ -273,20 +313,24 @@ def match_session_to_reference(session: dict, ref: RouteReference, bin_m: float)
     df = session["df"].copy()
     xy = latlng_to_xy(df["Latitude"].to_numpy(), df["Longitude"].to_numpy(), ref.lat0, ref.lng0)
 
-    if ref.vertex_tree is not None and len(ref.xy) > 0:
-        offroute, nearest_idx = ref.vertex_tree.query(xy)
-        nearest_idx = np.asarray(nearest_idx, dtype=int)
-        nearest_idx = np.clip(nearest_idx, 0, len(ref.cumulative_m) - 1)
-        progress = ref.cumulative_m[nearest_idx]
-    else:
-        progress = np.zeros(len(df), dtype=float)
-        offroute = np.zeros(len(df), dtype=float)
-        for i in range(len(df)):
-            along_m, dist_m, _ = project_point_to_polyline(xy[i], ref.xy, ref.cumulative_m)
-            progress[i] = along_m
-            offroute[i] = dist_m
+    raw_progress = np.full(len(df), np.nan, dtype=float)
+    offroute = np.full(len(df), np.nan, dtype=float)
+    for i in range(len(df)):
+        along_m, dist_m, _ = project_point_to_polyline(xy[i], ref.xy, ref.cumulative_m)
+        raw_progress[i] = along_m
+        offroute[i] = dist_m
 
-    # Remove zig-zag noise by enforcing non-decreasing progress.
+    progress = np.array(raw_progress, copy=True)
+    valid_mask = np.isfinite(raw_progress) & np.isfinite(offroute)
+    if np.any(valid_mask):
+        progress[valid_mask] = elastic_progress_assignment(
+            raw_progress[valid_mask],
+            offroute[valid_mask],
+            ref.total_m,
+        )
+
+    # Final monotonic safety clamp.
+    progress = np.nan_to_num(progress, nan=0.0)
     progress = np.maximum.accumulate(progress)
 
     df["progress_m"] = progress

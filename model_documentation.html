@@ -4,14 +4,19 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Kolkata ETA Model Documentation</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
   <style>
     :root {
       --bg: #f5f7fb;
       --paper: #ffffff;
       --line: #d7e1ee;
-      --text: #1f2f46;
-      --muted: #5f6f86;
+      --text: #13243a;
+      --muted: #2b3d56;
       --accent: #0f63b4;
     }
     * { box-sizing: border-box; }
@@ -45,8 +50,56 @@
       padding: 10px;
       background: #f9fbff;
     }
+    .chart-map-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 12px;
+      align-items: stretch;
+    }
+    .route-map {
+      height: 100%;
+      min-height: 320px;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      overflow: hidden;
+    }
+    .route-map-note {
+      margin-top: 8px;
+      font-size: 12px;
+      color: var(--muted);
+    }
     .small { font-size: 13px; color: var(--muted); }
     ul { margin-top: 6px; }
+    .compare-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 10px;
+    }
+    .compare-grid figure {
+      margin: 0;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 8px;
+    }
+    .compare-grid figcaption {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 6px;
+    }
+    pre.cli {
+      margin-top: 8px;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #f1f6ff;
+      color: #17283f;
+      font-size: 12px;
+      line-height: 1.45;
+      overflow-x: auto;
+      white-space: pre-wrap;
+    }
     img.chart {
       width: 100%;
       border: 1px solid var(--line);
@@ -85,6 +138,7 @@
     }
     @media (max-width: 900px) {
       .grid { grid-template-columns: 1fr; }
+      .chart-map-grid { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -133,6 +187,54 @@
     </section>
 
     <section>
+      <h2>4A) Data Cleaning BEFORE (raw CSV stage)</h2>
+      <div class="card small">
+        <ul>
+          <li>Input source: dynamic discovery of all session CSV files from <code>csv/</code> (or <code>csv_snapped/</code> when selected).</li>
+          <li>Schema normalization: parse latitude/longitude/timestamp safely, reject malformed rows, keep row index mapping for traceability.</li>
+          <li>GPS sanity filtering: remove impossible coordinates and non-finite numeric values.</li>
+          <li>Temporal ordering: rows are processed in sequence so downstream progress calculations stay consistent.</li>
+          <li>Session retention policy: partial sessions are not discarded; valid observed portions are retained for profile-based filling.</li>
+          <li>Manual correction support: in cleaner mode, deleting a point (for example deleting B from A-B-C) reconnects neighbors directly (A-C), preserving a continuous polyline.</li>
+          <li>After manual deletion and reconnection, traffic visualization is recomputed so segment colors update to reflect the new local speed and congestion context.</li>
+        </ul>
+        <div class="compare-grid">
+          <figure>
+            <img class="chart" src="datacleaningbefore.png" alt="Data cleaning before snapping and manual correction">
+            <figcaption>Before cleaning: noisier path with mismatched raw GPS sequence.</figcaption>
+          </figure>
+          <figure>
+            <img class="chart" src="datacleaningafter.png" alt="Data cleaning after snapping and manual correction">
+            <figcaption>After cleaning: snapped, reconnected path with updated traffic coloring.</figcaption>
+          </figure>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>4B) Data Cleaning AFTER (post-snap and training assembly)</h2>
+      <div class="card small">
+        <ul>
+          <li>Route snapping output: each GPS point is projected to route baseline geometry with monotonic progress constraints.</li>
+          <li>Elastic redistribution: reduces local over-clumping and large jump artifacts that appear at merge/diverge road sections.</li>
+          <li>Gap handling: missing route bins in incomplete sessions are imputed from weighted route profiles.</li>
+          <li>Feature assembly: progress, speed context, congestion context, route type, vehicle class, weekday, and time-of-day are generated per sample.</li>
+          <li>Train/test split discipline: group-aware split by session ID to reduce leakage between training and testing.</li>
+        </ul>
+        <div class="compare-grid">
+          <figure>
+            <img class="chart" src="beforesnap.png" alt="Before snap route geometry">
+            <figcaption>Before snap: raw path before post-snap training assembly.</figcaption>
+          </figure>
+          <figure>
+            <img class="chart" src="aftersnap.png" alt="After snap route geometry">
+            <figcaption>After snap: aligned route geometry used for feature generation and training.</figcaption>
+          </figure>
+        </div>
+      </div>
+    </section>
+
+    <section>
       <h2>5) Partial Session Handling</h2>
       <p>
         Sessions with incomplete route coverage are retained. The observed section contributes directly, while missing bins are imputed from weighted route profiles built across sessions.
@@ -162,19 +264,25 @@
     </section>
 
     <section>
-      <h2>8) Model Performance: Kilometers vs Remaining ETA</h2>
+      <h2>8) Model Performance: Distance Traveled vs Remaining ETA</h2>
       <p>
         This chart is computed from real route profile data, not synthetic samples. We use each profile point latitude/longitude to compute ground distance with the Haversine formula,
-        then estimate remaining ETA from per-segment average speed. X-axis is kilometers traveled from start, Y-axis is remaining ETA in minutes.
+        then estimate remaining ETA from per-segment speed and congestion. X-axis is distance traveled from start (kilometers), Y-axis is remaining ETA (minutes).
       </p>
       <div class="card small" id="distanceMathBox">
-        Distance math: For two points on Earth with latitude/longitude in radians, 
-        <code>a = sin²(Δφ/2) + cos(φ1)cos(φ2)sin²(Δλ/2)</code>, 
-        <code>c = 2 atan2(√a, √(1-a))</code>, 
-        <code>d = R · c</code> where <code>R = 6,371,000 m</code>.
+        <div>Distance math for two points on Earth with latitude/longitude in radians:</div>
+        $$
+        a = \sin^2\left(\frac{\Delta \phi}{2}\right) + \cos(\phi_1)\cos(\phi_2)\sin^2\left(\frac{\Delta \lambda}{2}\right)
+        $$
+        $$
+        c = 2\,\operatorname{atan2}(\sqrt{a}, \sqrt{1-a})
+        $$
+        $$
+        d = R\,c, \quad R = 6{,}371{,}000\ \text{m}
+        $$
       </div>
       <div class="card" style="margin-top:10px;">
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:end;">
+        <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px;align-items:end;">
           <div>
             <label for="curveRouteSelect">Route</label>
             <select id="curveRouteSelect">
@@ -187,13 +295,19 @@
             <select id="curveStepSelect">
               <option value="50" selected>50 meters</option>
               <option value="100">100 meters</option>
-              <option value="120">120 meters (training bin size)</option>
+              <option value="60">60 meters (training bin size)</option>
             </select>
           </div>
         </div>
         <div id="curveMeta" class="small" style="margin-top:8px;">Loading route curve...</div>
-        <div style="position: relative; height: 320px; margin-top: 8px;">
-          <canvas id="etaKmChart"></canvas>
+        <div class="chart-map-grid" style="margin-top: 8px;">
+          <div style="position: relative; height: 320px;">
+            <canvas id="etaKmChart"></canvas>
+          </div>
+          <div>
+            <div id="routeMap" class="route-map"></div>
+            <div id="routeMapStatus" class="route-map-note">Click a point on the chart to locate that point on the route.</div>
+          </div>
         </div>
       </div>
     </section>
@@ -203,11 +317,31 @@
       <div class="card small">
         <ul>
           <li>Route references: morning=43, evening=35</li>
-          <li>Bin size: 120 meters</li>
+          <li>Bin size: 60 meters</li>
           <li>Group-aware split by session ID</li>
           <li>Features: route type, vehicle class, time-of-day, weekday, route progress, off-route distance, local/global speed context, support count</li>
           <li>Target: ETA remaining minutes</li>
+          <li>Training command used: <code>C:/Python313/python.exe train_eta_model.py --bin-meters 60</code></li>
         </ul>
+        <pre class="cli">Sample CLI output from the exact training run:
+[    0.3s] Loaded 23 valid sessions
+[    0.3s] Using references -> morning: session_043_20260424_081539_Home_to_Office.csv | evening: session_035_20260420_165549_Office_to_Home.csv
+[    0.5s] Snapped sessions: 23/23
+[    1.2s] Exported 23 snapped CSV file(s) to csv_snapped
+[    1.5s] Built profile for morning with 364 bins
+[    1.9s] Built profile for evening with 369 bins
+[    4.3s] Built training table with 22309 rows
+[    4.3s] Training model: random_forest
+[    6.2s] Training model: hist_gradient_boosting
+[    8.9s] Training model: xgboost
+[   11.0s] Training complete. Best model: xgboost
+[   12.8s] Wrote training summary JSON
+
+Baseline test metrics emitted by training:
+model,mae_min,rmse_min,r2,rows
+xgboost,22.375758828769296,30.09077848945506,0.09323868024278104,1880
+hist_gradient_boosting,28.029334011417426,37.49523718705204,-0.4079212016495075,1880
+random_forest,29.704005606507174,41.95243304630297,-0.7625459357564113,1880</pre>
       </div>
     </section>
 
@@ -229,9 +363,53 @@
       <h2>11) Limitations and Edge Cases</h2>
       <div class="card small">
         <ul>
-          <li>Small dataset size may limit generalization stability.</li>
-          <li>Traffic changes by day/event/weather are not explicitly modeled yet.</li>
-          <li>Snapped baselines simplify geometry, which improves consistency but can suppress true detour behavior.</li>
+          <li>Current accuracy is modest on held-out data: XGBoost test MAE is about 22.38 minutes, RMSE is about 30.09 minutes, and R² is about 0.093.</li>
+          <li>Small dataset size and route coverage gaps reduce model confidence across rare traffic states.</li>
+          <li>Trip context is still under-specified: event spikes, weather effects, and incident-level disruptions are not yet represented.</li>
+          <li>Snapped baselines improve consistency but can compress true detour behavior and lane-level deviations.</li>
+          <li>Morning/evening behavior drift exists; a single global model can blur pattern differences when data is limited.</li>
+          <li>Sampling bias can occur because sessions are concentrated around specific days and departure windows.</li>
+        </ul>
+      </div>
+      <div class="card small" style="margin-top:10px;">
+        <h3>Why Accuracy Is Currently Low</h3>
+        <ul>
+          <li>Low signal-to-noise at point level: GPS jitter and stop-and-go bursts introduce high local variance in remaining ETA labels.</li>
+          <li>Insufficient condition coverage: the model has fewer examples for unusual congestion states (for example, severe evening bottlenecks).</li>
+          <li>Hidden heterogeneity: different morning route variants may share partial geometry but have different delays and turning penalties.</li>
+          <li>Limited explanatory variables: when key causal variables are missing, residual error remains high even with stronger models.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section>
+      <h2>12) Expected Improvement with More Data + Bayesian ETA Modeling</h2>
+      <div class="card small">
+        <p>
+          As more sessions are collected, the model should improve because each route segment is observed under more traffic states and departure times.
+          This reduces variance and makes feature-response relationships more stable.
+        </p>
+        <h3>Additional Parameters That Should Be Added</h3>
+        <ul>
+          <li>Trip start clock time from trip origin (not only current point time), so departures at 5:00 PM and 6:00 PM are treated as different traffic regimes.</li>
+          <li>Route variant identity as an explicit variable for morning direction.</li>
+          <li>Lagged congestion context (recent bins) to represent queue propagation.</li>
+          <li>Calendar context (weekday/weekend, holiday/event flags) and weather/incident indicators when available.</li>
+        </ul>
+        <h3>Morning Route Variants (V1-V4)</h3>
+        <ul>
+          <li>V1 (Best): Chingrihata allowed, forced right at Philips (no Technopolis).</li>
+          <li>V2: Chingrihata allowed, Technopolis forced (no Philips right).</li>
+          <li>V3: Forced left at Chingrihata, right at Philips allowed.</li>
+          <li>V4 (impossible in practice): forced left plus Technopolis forced.</li>
+        </ul>
+        <h3>How Bayesian Theory Helps Further</h3>
+        <ul>
+          <li>Bayesian ETA estimates a distribution, not only a single number, producing credible intervals for uncertainty-aware decisions.</li>
+          <li>Priors can encode known traffic tendencies (for example, congestion at 6:00 PM tends to be higher than at 5:00 PM on this corridor).</li>
+          <li>As new trips arrive, posterior updates adapt the model incrementally without full retraining from scratch.</li>
+          <li>Hierarchical Bayesian structure can share strength across route variants while still learning variant-specific delay patterns.</li>
+          <li>Result: lower error over time, better calibration, and more reliable ETA confidence bands for operations.</li>
         </ul>
       </div>
     </section>
@@ -240,6 +418,10 @@
   <script>
     let etaKmChartInstance = null;
     let activeApiBase = null;
+    let routeMapInstance = null;
+    let routePolyline = null;
+    let routePointMarker = null;
+    let currentRouteRows = [];
 
     const apiBaseCandidates = (() => {
       const sameOrigin = window.location.origin;
@@ -299,7 +481,8 @@
         .map((r) => ({
           lat: Number(r.lat),
           lng: Number(r.lng),
-          speed: Math.max(5, Number(r.avg_speed_kph) || 5)
+          speed: Math.max(1.5, Number(r.avg_speed_kph) || 1.5),
+          congestion: Math.max(0, Math.min(1, Number(r.congestion) || 0))
         }));
 
       if (rows.length < 2) return null;
@@ -313,8 +496,10 @@
         const a = rows[i - 1];
         const b = rows[i];
         const d = haversineMeters(a.lat, a.lng, b.lat, b.lng);
-        const speedKph = Math.max(5, (a.speed + b.speed) / 2);
-        const tMin = d / (speedKph * 1000 / 60);
+        const baseSpeedKph = Math.max(1.5, b.speed);
+        const congestionPenalty = 1 + (b.congestion ** 2) * 2.4;
+        const effectiveSpeedKph = Math.max(1.2, baseSpeedKph / congestionPenalty);
+        const tMin = d / (effectiveSpeedKph * 1000 / 60);
         segDist.push(d);
         segTimeMin.push(tMin);
         distPrefix.push(distPrefix[i - 1] + d);
@@ -343,30 +528,146 @@
       points.push({ x: totalDistM / 1000, y: 0, progress_pct: 100 });
       return {
         points,
+        profileRows: rows,
         totalDistKm: totalDistM / 1000,
         totalEtaMin: totalTimeMin,
         totalSamples: points.length
       };
     }
 
+    function routePointAtDistance(profileRows, distanceKm) {
+      const rows = Array.isArray(profileRows) ? profileRows : [];
+      if (rows.length < 2) return null;
+
+      const distPrefix = [0];
+      for (let i = 1; i < rows.length; i += 1) {
+        const a = rows[i - 1];
+        const b = rows[i];
+        distPrefix.push(distPrefix[i - 1] + haversineMeters(a.lat, a.lng, b.lat, b.lng));
+      }
+
+      const targetM = Math.max(0, Number(distanceKm) || 0) * 1000;
+      const totalM = distPrefix[distPrefix.length - 1];
+      if (targetM >= totalM) {
+        const last = rows[rows.length - 1];
+        return { lat: last.lat, lng: last.lng, binIdx: rows.length - 1 };
+      }
+
+      let idx = 0;
+      while (idx < distPrefix.length - 2 && distPrefix[idx + 1] < targetM) idx += 1;
+      const startM = distPrefix[idx];
+      const endM = distPrefix[idx + 1];
+      const span = Math.max(1e-6, endM - startM);
+      const ratio = Math.max(0, Math.min(1, (targetM - startM) / span));
+      const a = rows[idx];
+      const b = rows[idx + 1];
+
+      return {
+        lat: a.lat + (b.lat - a.lat) * ratio,
+        lng: a.lng + (b.lng - a.lng) * ratio,
+        binIdx: idx
+      };
+    }
+
+    function renderRouteMap(profileRows, selectedDistanceKm = null) {
+      const rows = Array.isArray(profileRows) ? profileRows : [];
+      if (rows.length < 2) return;
+
+      const routePoints = rows.map((r) => [Number(r.lat), Number(r.lng)]);
+      if (!routeMapInstance) {
+        routeMapInstance = L.map('routeMap', { zoomControl: true });
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          maxZoom: 19,
+          attribution: '&copy; OpenStreetMap contributors'
+        }).addTo(routeMapInstance);
+      }
+
+      if (routePolyline) {
+        routePolyline.remove();
+      }
+      routePolyline = L.polyline(routePoints, {
+        color: '#1460aa',
+        weight: 5,
+        opacity: 0.95
+      }).addTo(routeMapInstance);
+      routeMapInstance.fitBounds(routePolyline.getBounds().pad(0.08));
+
+      if (selectedDistanceKm !== null && Number.isFinite(Number(selectedDistanceKm))) {
+        const pt = routePointAtDistance(rows, selectedDistanceKm);
+        if (pt) {
+          if (routePointMarker) routePointMarker.remove();
+          routePointMarker = L.circleMarker([pt.lat, pt.lng], {
+            radius: 7,
+            color: '#111',
+            weight: 2,
+            fillColor: '#d73434',
+            fillOpacity: 1
+          }).addTo(routeMapInstance);
+          routePointMarker.bindPopup(`Selected point<br>Lat ${pt.lat.toFixed(6)}<br>Lng ${pt.lng.toFixed(6)}`);
+        }
+      }
+
+      routeMapInstance.invalidateSize();
+    }
+
     function renderEtaKmChart(curve, routeLabel, stepMeters) {
       const ctx = document.getElementById('etaKmChart');
       if (etaKmChartInstance) etaKmChartInstance.destroy();
+
+      const endpointLabelPlugin = {
+        id: 'endpointLabelPlugin',
+        afterDatasetsDraw(chart) {
+          const dataset = chart.data.datasets[0];
+          const meta = chart.getDatasetMeta(0);
+          if (!dataset || !meta || !meta.data || meta.data.length === 0) return;
+
+          const lastIndex = meta.data.length - 1;
+          const point = meta.data[lastIndex];
+          const lastX = curve.points[lastIndex]?.x;
+          const lastY = curve.points[lastIndex]?.y;
+          if (!point || lastX === undefined || lastY === undefined) return;
+
+          const { ctx } = chart;
+          ctx.save();
+          ctx.fillStyle = '#1f2f46';
+          ctx.strokeStyle = '#ffffff';
+          ctx.lineWidth = 3;
+          ctx.font = '12px Segoe UI, sans-serif';
+          const label = `End ${lastX.toFixed(3)} km | ${lastY.toFixed(1)} min`;
+          const x = point.x - 8;
+          const y = point.y - 12;
+          ctx.strokeText(label, x, y);
+          ctx.fillText(label, x, y);
+          ctx.restore();
+        }
+      };
+
+      const selectCurvePoint = (index) => {
+        const point = curve.points[index];
+        if (!point) return;
+        renderRouteMap(curve.profileRows, point.x);
+        const status = document.getElementById('routeMapStatus');
+        if (status) {
+          status.textContent = `Selected about ${point.x.toFixed(3)} km from start, remaining ETA ${point.y.toFixed(2)} min.`;
+        }
+      };
 
       etaKmChartInstance = new Chart(ctx, {
         type: 'line',
         data: {
           datasets: [{
-            label: 'Remaining ETA (minutes)',
+            label: 'Remaining ETA',
             data: curve.points,
             borderColor: '#1460aa',
             backgroundColor: 'rgba(20, 96, 170, 0.08)',
-            tension: 0.15,
-            fill: true,
-            pointRadius: 1.4,
+            tension: 0,
+            stepped: true,
+            fill: false,
+            pointRadius: 1,
             pointHoverRadius: 3
           }]
         },
+        plugins: [endpointLabelPlugin],
         options: {
           responsive: true,
           maintainAspectRatio: false,
@@ -375,15 +676,22 @@
             legend: { display: true, position: 'top' },
             tooltip: {
               callbacks: {
-                label: (ctx2) => `ETA ${ctx2.parsed.y.toFixed(2)} min`,
-                title: (items) => `Km traveled ${items[0].parsed.x.toFixed(3)} km`
+                label: (ctx2) => `Remaining ETA ${ctx2.parsed.y.toFixed(2)} min`,
+                title: (items) => `Distance traveled ${items[0].parsed.x.toFixed(3)} km`
               }
+            }
+          },
+          onClick: (_, elements) => {
+            if (elements && elements.length > 0) {
+              selectCurvePoint(elements[0].index);
             }
           },
           scales: {
             x: {
               type: 'linear',
-              title: { display: true, text: 'Kilometers Traveled From Start (km)' }
+              min: 0,
+              max: curve.totalDistKm,
+              title: { display: true, text: 'Distance Traveled From Start (km)' }
             },
             y: {
               beginAtZero: true,
@@ -400,7 +708,8 @@
         `<b>Estimated full-route ETA:</b> ${curve.totalEtaMin.toFixed(2)} min`,
         `<b>Sampling step:</b> ${stepMeters} m`,
         `<b>Plotted points:</b> ${curve.totalSamples}`,
-        `<b>Training bin size reference:</b> 120 m`
+        `<b>Training bin size reference:</b> 60 m`,
+        `<b>Curve model:</b> congestion-adjusted local segment integration`
       ].join(' | ');
     }
 
@@ -413,6 +722,8 @@
       if (!curve) {
         throw new Error('Route profile does not have enough valid points for curve generation.');
       }
+      currentRouteRows = curve.profileRows;
+      renderRouteMap(currentRouteRows);
       renderEtaKmChart(curve, routeLabel, stepMeters);
     }
 
@@ -481,6 +792,18 @@
       console.error(err);
       document.getElementById('summaryBox').textContent = `Failed to load model summary: ${err.message}`;
       document.getElementById('curveMeta').textContent = `Failed to render curve: ${err.message}`;
+    });
+
+    document.addEventListener('DOMContentLoaded', () => {
+      if (window.renderMathInElement) {
+        renderMathInElement(document.body, {
+          delimiters: [
+            { left: '$$', right: '$$', display: true },
+            { left: '$', right: '$', display: false }
+          ],
+          throwOnError: false
+        });
+      }
     });
   </script>
 </body>

@@ -140,6 +140,52 @@ button:hover { background: #0d569d; }
   line-height: 1.35;
 }
 
+.predict-trace {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px;
+  background: #f4f8ff;
+  font-size: 12px;
+  line-height: 1.35;
+  color: #30435e;
+}
+
+.predict-trace .trace-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.predict-trace .trace-title {
+  font-weight: 600;
+}
+
+.predict-trace .trace-stage {
+  color: #4b5f7a;
+  margin-bottom: 6px;
+}
+
+.predict-trace .trace-bar {
+  width: 100%;
+  height: 8px;
+  background: #dce7f8;
+  border-radius: 999px;
+  overflow: hidden;
+  margin-bottom: 6px;
+}
+
+.predict-trace .trace-fill {
+  height: 100%;
+  width: 0%;
+  background: #1460aa;
+  transition: width 0.35s ease;
+}
+
+.predict-trace .trace-meta {
+  color: #60738f;
+}
+
 .legend {
   display: grid;
   gap: 4px;

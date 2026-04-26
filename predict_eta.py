@@ -64,6 +64,33 @@ def nearest_progress_ratio_from_latlng(profile: pd.DataFrame, lat: float, lng: f
     return float(np.clip(ratio, 0.0, 1.0)), idx, float(dists.iloc[idx])
 
 
+def segment_local_eta_min(profile: pd.DataFrame, start_bin: int, end_bin: int) -> float:
+    if profile.empty:
+        return 0.0
+
+    n = len(profile)
+    s = int(np.clip(start_bin, 0, n - 1))
+    e = int(np.clip(end_bin, 0, n - 1))
+    if e <= s:
+        return 0.0
+
+    total_min = 0.0
+    for i in range(s, e):
+        a = profile.iloc[i]
+        b = profile.iloc[i + 1]
+        d_m = haversine_m(float(a["lat"]), float(a["lng"]), float(b["lat"]), float(b["lng"]))
+
+        # Penalize slow bins and congestion so short choke segments are not underestimated.
+        speed_kph = max(3.0, float(b.get("avg_speed_kph", 20.0)))
+        congestion = float(np.clip(b.get("congestion", 0.0), 0.0, 1.0))
+        congestion_multiplier = 1.0 + (congestion**2) * 2.4
+        effective_speed_kph = max(2.0, speed_kph / congestion_multiplier)
+
+        total_min += (d_m / 1000.0) / effective_speed_kph * 60.0
+
+    return float(max(0.0, total_min))
+
+
 def main() -> None:
     args = parse_args()
     model_path = Path(args.model)
@@ -121,12 +148,34 @@ def main() -> None:
     eta_min = eta_min_full_route
     remaining_to_route_end = max(0.0, 1.0 - progress_ratio)
     remaining_to_destination = None
+    destination_delta_ratio = None
+    destination_ahead = None
+    route_end_bin = len(profile) - 1
+    model_eta_for_trip = eta_min_full_route
+    local_eta_for_trip = segment_local_eta_min(profile, bin_idx, route_end_bin)
+    blend_local_weight = 0.45
+
     if destination_progress_ratio is not None:
-        remaining_to_destination = max(0.0, destination_progress_ratio - progress_ratio)
+        destination_delta_ratio = destination_progress_ratio - progress_ratio
+        destination_ahead = destination_delta_ratio >= 0.0
+        remaining_to_destination = max(0.0, destination_delta_ratio)
+        destination_target_bin = int(np.clip(round(destination_progress_ratio * route_end_bin), 0, route_end_bin))
+
         if remaining_to_route_end > 1e-9:
-            eta_min = eta_min_full_route * (remaining_to_destination / remaining_to_route_end)
+            model_eta_for_trip = eta_min_full_route * (remaining_to_destination / remaining_to_route_end)
         else:
-            eta_min = 0.0
+            model_eta_for_trip = 0.0
+
+        if destination_ahead:
+            local_eta_for_trip = segment_local_eta_min(profile, bin_idx, destination_target_bin)
+        else:
+            local_eta_for_trip = 0.0
+
+        # For short spans, emphasize local profile ETA to preserve sharp congestion behavior.
+        trip_span = float(np.clip(abs(destination_delta_ratio), 0.0, 1.0))
+        blend_local_weight = float(np.clip(0.45 + (0.25 - trip_span) * 1.2, 0.45, 0.8))
+
+    eta_min = (1.0 - blend_local_weight) * model_eta_for_trip + blend_local_weight * local_eta_for_trip
     eta_min = max(0.0, eta_min)
 
     start_dt = datetime.combine(datetime.today().date(), datetime.strptime(args.start_time, "%H:%M").time())
@@ -140,6 +189,8 @@ def main() -> None:
         "remaining_ratio_to_route_end": round(float(remaining_to_route_end), 6),
         "estimated_eta_min": round(eta_min, 2),
         "estimated_eta_min_to_route_end": round(eta_min_full_route, 2),
+        "estimated_eta_local_min": round(local_eta_for_trip, 2),
+        "eta_blend_local_weight": round(float(blend_local_weight), 3),
         "estimated_arrival_time": eta_dt.strftime("%H:%M:%S"),
         "model": bundle.get("best_model_name", "unknown"),
         "support_at_position": int(row["session_support"]),
@@ -154,6 +205,9 @@ def main() -> None:
         result["destination_progress_ratio"] = round(float(destination_progress_ratio), 6)
         result["destination_point_to_baseline_m"] = round(float(destination_point_dist_m), 2)
         result["remaining_ratio_to_destination"] = round(float(remaining_to_destination), 6)
+        result["destination_delta_ratio"] = round(float(destination_delta_ratio), 6)
+        result["destination_ahead"] = bool(destination_ahead)
+        result["requested_trip_span_ratio"] = round(float(abs(destination_delta_ratio)), 6)
         result["destination_applied"] = True
     else:
         result["destination_applied"] = False
