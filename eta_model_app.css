@@ -55,6 +55,40 @@ body {
   grid-template-columns: 1fr;
   gap: 8px;
   align-content: start;
+  overflow-y: auto;
+  max-height: calc(100vh - 84px);
+}
+
+.controls::-webkit-scrollbar {
+  width: 6px;
+}
+
+.controls::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.controls::-webkit-scrollbar-thumb {
+  background: #ccc;
+  border-radius: 3px;
+}
+
+.controls::-webkit-scrollbar-thumb:hover {
+  background: #999;
+}
+
+.form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.form-row > * {
+  min-width: 0;
+}
+
+.form-row label {
+  grid-column: 1 / -1;
+  margin-bottom: -6px;
 }
 
 .controls h2,
@@ -86,8 +120,14 @@ button {
 
 button:hover { background: #0d569d; }
 
-#clearPointBtn {
+#clearPointBtn,
+#clearDestinationBtn {
   background: #7a8797;
+}
+
+#clearPointBtn:hover,
+#clearDestinationBtn:hover {
+  background: #5f6d7a;
 }
 
 .result,
@@ -151,5 +191,9 @@ button:hover { background: #0d569d; }
 
   .map-wrap {
     min-height: 60vh;
+  }
+
+  .controls {
+    max-height: none;
   }
 }

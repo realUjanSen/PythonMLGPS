@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Kolkata ETA Model Documentation</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
   <style>
     :root {
       --bg: #f5f7fb;
@@ -161,7 +162,44 @@
     </section>
 
     <section>
-      <h2>7) Training Parameters</h2>
+      <h2>8) Model Performance: Kilometers vs Remaining ETA</h2>
+      <p>
+        This chart is computed from real route profile data, not synthetic samples. We use each profile point latitude/longitude to compute ground distance with the Haversine formula,
+        then estimate remaining ETA from per-segment average speed. X-axis is kilometers traveled from start, Y-axis is remaining ETA in minutes.
+      </p>
+      <div class="card small" id="distanceMathBox">
+        Distance math: For two points on Earth with latitude/longitude in radians, 
+        <code>a = sin²(Δφ/2) + cos(φ1)cos(φ2)sin²(Δλ/2)</code>, 
+        <code>c = 2 atan2(√a, √(1-a))</code>, 
+        <code>d = R · c</code> where <code>R = 6,371,000 m</code>.
+      </div>
+      <div class="card" style="margin-top:10px;">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:end;">
+          <div>
+            <label for="curveRouteSelect">Route</label>
+            <select id="curveRouteSelect">
+              <option value="morning">Morning (Home to Office)</option>
+              <option value="evening">Evening (Office to Home)</option>
+            </select>
+          </div>
+          <div>
+            <label for="curveStepSelect">Sampling Step</label>
+            <select id="curveStepSelect">
+              <option value="50" selected>50 meters</option>
+              <option value="100">100 meters</option>
+              <option value="120">120 meters (training bin size)</option>
+            </select>
+          </div>
+        </div>
+        <div id="curveMeta" class="small" style="margin-top:8px;">Loading route curve...</div>
+        <div style="position: relative; height: 320px; margin-top: 8px;">
+          <canvas id="etaKmChart"></canvas>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>9) Training Parameters</h2>
       <div class="card small">
         <ul>
           <li>Route references: morning=43, evening=35</li>
@@ -174,12 +212,13 @@
     </section>
 
     <section>
-      <h2>8) Deployed Usage</h2>
+      <h2>10) Deployed Usage</h2>
       <p>Use the deployed app at <a href="eta_model_app.html">eta_model_app.html</a>.</p>
       <div class="card small">
         <ol>
           <li>Choose route (morning/evening) and start time.</li>
-          <li>Click a geographic point on the baseline polyline.</li>
+          <li>Toggle mode: "Current Location" or "Set Destination".</li>
+          <li>Click a geographic point on the baseline polyline to set current location or destination.</li>
           <li>Run prediction to get ETA and expected arrival time.</li>
           <li>Inspect choke points colored by congestion (green/yellow/red).</li>
         </ol>
@@ -187,7 +226,7 @@
     </section>
 
     <section>
-      <h2>9) Limitations and Edge Cases</h2>
+      <h2>11) Limitations and Edge Cases</h2>
       <div class="card small">
         <ul>
           <li>Small dataset size may limit generalization stability.</li>
@@ -199,19 +238,194 @@
   </article>
 
   <script>
+    let etaKmChartInstance = null;
+    let activeApiBase = null;
+
+    const apiBaseCandidates = (() => {
+      const sameOrigin = window.location.origin;
+      const candidates = [sameOrigin];
+      if (!sameOrigin.includes(':8000')) {
+        candidates.push('http://localhost:8000', 'http://127.0.0.1:8000');
+      }
+      return [...new Set(candidates)];
+    })();
+
+    function haversineMeters(lat1, lon1, lat2, lon2) {
+      const toRad = (v) => (v * Math.PI) / 180;
+      const R = 6371000;
+      const p1 = toRad(lat1);
+      const p2 = toRad(lat2);
+      const dP = toRad(lat2 - lat1);
+      const dL = toRad(lon2 - lon1);
+      const a = Math.sin(dP / 2) ** 2 + Math.cos(p1) * Math.cos(p2) * Math.sin(dL / 2) ** 2;
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+      return R * c;
+    }
+
+    function buildApiUrl(base, endpoint) {
+      if (/^https?:\/\//i.test(endpoint)) return endpoint;
+      return `${base}${endpoint.startsWith('/') ? endpoint : `/${endpoint}`}`;
+    }
+
+    async function safeJson(endpoint) {
+      let lastError = null;
+
+      for (const base of apiBaseCandidates) {
+        const url = buildApiUrl(base, endpoint);
+        try {
+          const res = await fetch(url);
+          const txt = await res.text();
+          if (!res.ok) {
+            throw new Error(`${url} failed (${res.status}): ${txt.slice(0, 180)}`);
+          }
+          try {
+            const parsed = JSON.parse(txt);
+            activeApiBase = base;
+            return parsed;
+          } catch (err) {
+            throw new Error(`${url} returned non-JSON: ${txt.slice(0, 180)}`);
+          }
+        } catch (err) {
+          lastError = err;
+        }
+      }
+
+      throw lastError || new Error(`All API bases failed for ${endpoint}`);
+    }
+
+    function buildKmVsEtaCurve(profileRows, sampleStepMeters) {
+      const rows = (Array.isArray(profileRows) ? profileRows : [])
+        .filter((r) => Number.isFinite(Number(r.lat)) && Number.isFinite(Number(r.lng)))
+        .map((r) => ({
+          lat: Number(r.lat),
+          lng: Number(r.lng),
+          speed: Math.max(5, Number(r.avg_speed_kph) || 5)
+        }));
+
+      if (rows.length < 2) return null;
+
+      const distPrefix = [0];
+      const timePrefix = [0];
+      const segDist = [];
+      const segTimeMin = [];
+
+      for (let i = 1; i < rows.length; i += 1) {
+        const a = rows[i - 1];
+        const b = rows[i];
+        const d = haversineMeters(a.lat, a.lng, b.lat, b.lng);
+        const speedKph = Math.max(5, (a.speed + b.speed) / 2);
+        const tMin = d / (speedKph * 1000 / 60);
+        segDist.push(d);
+        segTimeMin.push(tMin);
+        distPrefix.push(distPrefix[i - 1] + d);
+        timePrefix.push(timePrefix[i - 1] + tMin);
+      }
+
+      const totalDistM = distPrefix[distPrefix.length - 1];
+      const totalTimeMin = timePrefix[timePrefix.length - 1];
+      const points = [];
+
+      for (let d = 0; d < totalDistM; d += sampleStepMeters) {
+        let idx = 0;
+        while (idx < segDist.length - 1 && distPrefix[idx + 1] < d) idx += 1;
+        const segStart = distPrefix[idx];
+        const segLen = Math.max(1, segDist[idx]);
+        const r = Math.max(0, Math.min(1, (d - segStart) / segLen));
+        const elapsedMin = timePrefix[idx] + r * segTimeMin[idx];
+        const remainMin = Math.max(0, totalTimeMin - elapsedMin);
+        points.push({
+          x: d / 1000,
+          y: remainMin,
+          progress_pct: (d / totalDistM) * 100
+        });
+      }
+
+      points.push({ x: totalDistM / 1000, y: 0, progress_pct: 100 });
+      return {
+        points,
+        totalDistKm: totalDistM / 1000,
+        totalEtaMin: totalTimeMin,
+        totalSamples: points.length
+      };
+    }
+
+    function renderEtaKmChart(curve, routeLabel, stepMeters) {
+      const ctx = document.getElementById('etaKmChart');
+      if (etaKmChartInstance) etaKmChartInstance.destroy();
+
+      etaKmChartInstance = new Chart(ctx, {
+        type: 'line',
+        data: {
+          datasets: [{
+            label: 'Remaining ETA (minutes)',
+            data: curve.points,
+            borderColor: '#1460aa',
+            backgroundColor: 'rgba(20, 96, 170, 0.08)',
+            tension: 0.15,
+            fill: true,
+            pointRadius: 1.4,
+            pointHoverRadius: 3
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          parsing: true,
+          plugins: {
+            legend: { display: true, position: 'top' },
+            tooltip: {
+              callbacks: {
+                label: (ctx2) => `ETA ${ctx2.parsed.y.toFixed(2)} min`,
+                title: (items) => `Km traveled ${items[0].parsed.x.toFixed(3)} km`
+              }
+            }
+          },
+          scales: {
+            x: {
+              type: 'linear',
+              title: { display: true, text: 'Kilometers Traveled From Start (km)' }
+            },
+            y: {
+              beginAtZero: true,
+              title: { display: true, text: 'Remaining ETA (minutes)' }
+            }
+          }
+        }
+      });
+
+      const meta = document.getElementById('curveMeta');
+      meta.innerHTML = [
+        `<b>Route:</b> ${routeLabel}`,
+        `<b>Total route distance:</b> ${curve.totalDistKm.toFixed(3)} km`,
+        `<b>Estimated full-route ETA:</b> ${curve.totalEtaMin.toFixed(2)} min`,
+        `<b>Sampling step:</b> ${stepMeters} m`,
+        `<b>Plotted points:</b> ${curve.totalSamples}`,
+        `<b>Training bin size reference:</b> 120 m`
+      ].join(' | ');
+    }
+
+    async function loadAndRenderCurve() {
+      const route = document.getElementById('curveRouteSelect').value;
+      const stepMeters = Number(document.getElementById('curveStepSelect').value || 50);
+      const routeLabel = route === 'morning' ? 'Morning (Home to Office)' : 'Evening (Office to Home)';
+      const profile = await safeJson(`/api/route-profile?route=${encodeURIComponent(route)}`);
+      const curve = buildKmVsEtaCurve(profile, stepMeters);
+      if (!curve) {
+        throw new Error('Route profile does not have enough valid points for curve generation.');
+      }
+      renderEtaKmChart(curve, routeLabel, stepMeters);
+    }
+
     function asPills(items) {
       if (!Array.isArray(items) || items.length === 0) return "None";
       return items.map((x) => `<span class=\"pill\">${String(x)}</span>`).join("");
     }
 
     async function loadDocData() {
-      const [summaryRes, datasetRes] = await Promise.all([
-        fetch('/api/model-summary'),
-        fetch('/api/dataset-info')
+      const [summary, dataset] = await Promise.all([
+        safeJson('/api/model-summary'),
+        safeJson('/api/dataset-info')
       ]);
-
-      const summary = await summaryRes.json();
-      const dataset = await datasetRes.json();
 
       const summaryBox = document.getElementById('summaryBox');
       summaryBox.innerHTML = [
@@ -219,7 +433,8 @@
         `<b>Morning / Evening:</b> ${summary.morning_sessions} / ${summary.evening_sessions}`,
         `<b>Best model:</b> ${summary.best_model}`,
         `<b>Morning baseline:</b> ${summary.morning_reference}`,
-        `<b>Evening baseline:</b> ${summary.evening_reference}`
+        `<b>Evening baseline:</b> ${summary.evening_reference}`,
+        `<b>API base used:</b> ${activeApiBase || 'unknown'}`
       ].join('<br>');
 
       const datasetBox = document.getElementById('datasetBox');
@@ -245,11 +460,27 @@
           <tbody>${rows}</tbody>
         </table>
       `;
+
+      await loadAndRenderCurve();
+
+      document.getElementById('curveRouteSelect').addEventListener('change', () => {
+        loadAndRenderCurve().catch((err) => {
+          console.error(err);
+          document.getElementById('curveMeta').textContent = `Failed to render curve: ${err.message}`;
+        });
+      });
+      document.getElementById('curveStepSelect').addEventListener('change', () => {
+        loadAndRenderCurve().catch((err) => {
+          console.error(err);
+          document.getElementById('curveMeta').textContent = `Failed to render curve: ${err.message}`;
+        });
+      });
     }
 
     loadDocData().catch((err) => {
       console.error(err);
-      document.getElementById('summaryBox').textContent = 'Failed to load model summary.';
+      document.getElementById('summaryBox').textContent = `Failed to load model summary: ${err.message}`;
+      document.getElementById('curveMeta').textContent = `Failed to render curve: ${err.message}`;
     });
   </script>
 </body>

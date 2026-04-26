@@ -1,13 +1,22 @@
 const map = L.map("map", { zoomControl: true }).setView([22.54, 88.4], 12);
-L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+const lightTileLayer = L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
   maxZoom: 19,
   attribution: "&copy; OpenStreetMap contributors"
-}).addTo(map);
+});
+const darkTileLayer = L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
+  maxZoom: 19,
+  attribution: "&copy; OpenStreetMap contributors &copy; CARTO"
+});
+let activeBaseLayer = lightTileLayer.addTo(map);
 
 let routeLayer = L.layerGroup().addTo(map);
 let selectedMarker = null;
 let selectedPoint = null;
+let destinationMarker = null;
+let destinationPoint = null;
 let currentProfile = [];
+let selectionMode = "current"; // "current" or "destination"
+let trafficColorMode = "banded";
 
 const statusBar = document.getElementById("statusBar");
 const routeSelect = document.getElementById("routeSelect");
@@ -15,11 +24,34 @@ const vehicleSelect = document.getElementById("vehicleSelect");
 const startTimeInput = document.getElementById("startTime");
 const resultBox = document.getElementById("resultBox");
 const chokeList = document.getElementById("chokeList");
+const locationStatus = document.getElementById("locationStatus");
+const destinationStatus = document.getElementById("destinationStatus");
+const modeCurrentBtn = document.getElementById("modeCurrentBtn");
+const modeDestinationBtn = document.getElementById("modeDestinationBtn");
+const mapThemeSelect = document.getElementById("mapThemeSelect");
+const trafficColorModeSelect = document.getElementById("trafficColorMode");
 
 function congestionColor(v) {
   if (v <= 0.33) return "#2ca94f";
   if (v <= 0.66) return "#d9aa1f";
   return "#d73434";
+}
+
+function gradientCongestionColor(v) {
+  const c = Math.max(0, Math.min(1, Number(v) || 0));
+  let r;
+  let g;
+  let b = 52;
+  if (c <= 0.5) {
+    const t = c / 0.5;
+    r = Math.round(44 + (217 - 44) * t);
+    g = Math.round(169 + (170 - 169) * t);
+  } else {
+    const t = (c - 0.5) / 0.5;
+    r = Math.round(217 + (215 - 217) * t);
+    g = Math.round(170 + (52 - 170) * t);
+  }
+  return `rgb(${r}, ${g}, ${b})`;
 }
 
 function toHtmlEscape(value) {
@@ -31,10 +63,34 @@ function toHtmlEscape(value) {
     .replace(/'/g, "&#39;");
 }
 
+function setMapTheme(theme) {
+  if (activeBaseLayer) {
+    map.removeLayer(activeBaseLayer);
+  }
+  activeBaseLayer = theme === "dark" ? darkTileLayer : lightTileLayer;
+  activeBaseLayer.addTo(map);
+}
+
+function updateModeButtons() {
+  if (selectionMode === "current") {
+    modeCurrentBtn.style.background = "#14a44d";
+    modeDestinationBtn.style.background = "#7a8797";
+  } else {
+    modeCurrentBtn.style.background = "#7a8797";
+    modeDestinationBtn.style.background = "#d73434";
+  }
+}
+
 async function loadProfile() {
   const route = routeSelect.value;
   statusBar.textContent = `Loading ${route} profile...`;
   routeLayer.clearLayers();
+  destinationPoint = null;
+  if (destinationMarker) {
+    destinationMarker.remove();
+    destinationMarker = null;
+  }
+  destinationStatus.textContent = "Click map to set.";
 
   const res = await fetch(`/api/route-profile?route=${encodeURIComponent(route)}`);
   const profile = await res.json();
@@ -48,11 +104,26 @@ async function loadProfile() {
   for (let i = 1; i < profile.length; i += 1) {
     const a = profile[i - 1];
     const b = profile[i];
-    const color = congestionColor(Number(b.congestion));
-    L.polyline([[a.lat, a.lng], [b.lat, b.lng]], {
+    const color = trafficColorMode === "gradient"
+      ? gradientCongestionColor(Number(b.congestion))
+      : congestionColor(Number(b.congestion));
+    const segment = [[a.lat, a.lng], [b.lat, b.lng]];
+
+    // Draw a minimal black outline first to make traffic colors readable on bright map tiles.
+    L.polyline(segment, {
+      color: "#000000",
+      weight: 5,
+      opacity: 0.95,
+      lineCap: "round",
+      lineJoin: "round"
+    }).addTo(routeLayer);
+
+    L.polyline(segment, {
       color,
       weight: 4,
-      opacity: 0.9
+      opacity: 0.95,
+      lineCap: "round",
+      lineJoin: "round"
     }).addTo(routeLayer);
   }
 
@@ -85,7 +156,13 @@ async function predictEta() {
   const startTime = startTimeInput.value || "08:15";
   const vehicleClass = vehicleSelect.value;
 
-  const url = `/api/predict-eta?route=${encodeURIComponent(route)}&startTime=${encodeURIComponent(startTime)}&vehicleClass=${encodeURIComponent(vehicleClass)}&lat=${encodeURIComponent(selectedPoint.lat)}&lng=${encodeURIComponent(selectedPoint.lng)}`;
+  let urlParams = `route=${encodeURIComponent(route)}&startTime=${encodeURIComponent(startTime)}&vehicleClass=${encodeURIComponent(vehicleClass)}&lat=${encodeURIComponent(selectedPoint.lat)}&lng=${encodeURIComponent(selectedPoint.lng)}`;
+  
+  if (destinationPoint) {
+    urlParams += `&dest_lat=${encodeURIComponent(destinationPoint.lat)}&dest_lng=${encodeURIComponent(destinationPoint.lng)}`;
+  }
+
+  const url = `/api/predict-eta?${urlParams}`;
   resultBox.textContent = "Predicting...";
 
   const res = await fetch(url);
@@ -97,42 +174,103 @@ async function predictEta() {
     return;
   }
 
+  // Format times
+  const startTimeFormatted = toHtmlEscape(startTime);
+  const arrivalTime = toHtmlEscape(data.estimated_arrival_time);
+
   resultBox.innerHTML = [
+    `<b>Start Time:</b> ${startTimeFormatted}`,
+    `<b>Arrival Time:</b> ${arrivalTime}`,
     `<b>ETA:</b> ${toHtmlEscape(data.estimated_eta_min)} min`,
-    `<b>Arrival:</b> ${toHtmlEscape(data.estimated_arrival_time)}`,
+    `<b>ETA To Route End:</b> ${toHtmlEscape(data.estimated_eta_min_to_route_end ?? data.estimated_eta_min)} min`,
     `<b>Model:</b> ${toHtmlEscape(data.model)}`,
     `<b>Progress Ratio:</b> ${(Number(data.progress_ratio) * 100).toFixed(1)}%`,
+    `<b>Destination Applied:</b> ${data.destination_applied ? "Yes" : "No"}`,
+    `<b>Destination Progress:</b> ${data.destination_progress_ratio !== undefined ? `${(Number(data.destination_progress_ratio) * 100).toFixed(1)}%` : "N/A"}`,
     `<b>Point-to-baseline:</b> ${toHtmlEscape(data.selected_point_to_baseline_m ?? 0)} m`
   ].join("<br>");
 
   renderChokes(data.choke_points_ahead || []);
 }
 
+// Handle map clicks based on current mode
 map.on("click", (e) => {
-  selectedPoint = { lat: e.latlng.lat, lng: e.latlng.lng };
-  if (selectedMarker) selectedMarker.remove();
-  selectedMarker = L.circleMarker(e.latlng, {
-    radius: 6,
-    color: "#000",
-    fillColor: "#14a44d",
-    fillOpacity: 1
-  }).addTo(map).bindTooltip("Selected ETA query point", { permanent: false });
-  statusBar.textContent = `Selected point: ${e.latlng.lat.toFixed(6)}, ${e.latlng.lng.toFixed(6)}`;
+  if (selectionMode === "current") {
+    // Set start point
+    selectedPoint = { lat: e.latlng.lat, lng: e.latlng.lng };
+    if (selectedMarker) selectedMarker.remove();
+    selectedMarker = L.circleMarker(e.latlng, {
+      radius: 6,
+      color: "#000",
+      fillColor: "#14a44d",
+      fillOpacity: 1
+    }).addTo(map).bindTooltip("Start point", { permanent: false });
+    locationStatus.textContent = `${e.latlng.lat.toFixed(4)}, ${e.latlng.lng.toFixed(4)}`;
+    statusBar.textContent = `Start point set: ${e.latlng.lat.toFixed(6)}, ${e.latlng.lng.toFixed(6)}`;
+  } else {
+    // Set destination point
+    destinationPoint = { lat: e.latlng.lat, lng: e.latlng.lng };
+    if (destinationMarker) destinationMarker.remove();
+    destinationMarker = L.circleMarker(e.latlng, {
+      radius: 6,
+      color: "#000",
+      fillColor: "#d73434",
+      fillOpacity: 1
+    }).addTo(map).bindTooltip("Destination point", { permanent: false });
+    destinationStatus.textContent = `${e.latlng.lat.toFixed(4)}, ${e.latlng.lng.toFixed(4)}`;
+    statusBar.textContent = `Destination point set: ${e.latlng.lat.toFixed(6)}, ${e.latlng.lng.toFixed(6)}`;
+  }
+});
+
+// Mode toggle buttons
+modeCurrentBtn.addEventListener("click", () => {
+  selectionMode = "current";
+  updateModeButtons();
+  statusBar.textContent = "Mode: Click on map to set START POINT";
+});
+
+modeDestinationBtn.addEventListener("click", () => {
+  selectionMode = "destination";
+  updateModeButtons();
+  statusBar.textContent = "Mode: Click on map to set DESTINATION POINT";
 });
 
 document.getElementById("predictBtn").addEventListener("click", predictEta);
+
 document.getElementById("clearPointBtn").addEventListener("click", () => {
   selectedPoint = null;
   if (selectedMarker) {
     selectedMarker.remove();
     selectedMarker = null;
   }
-  resultBox.textContent = "Point cleared. Select a point on map to query ETA.";
+  locationStatus.textContent = "Click map to set.";
+  resultBox.textContent = "Start point cleared. Select a point on map to query ETA.";
   chokeList.textContent = "No prediction yet.";
 });
 
-routeSelect.addEventListener("change", loadProfile);
+document.getElementById("clearDestinationBtn").addEventListener("click", () => {
+  destinationPoint = null;
+  if (destinationMarker) {
+    destinationMarker.remove();
+    destinationMarker = null;
+  }
+  destinationStatus.textContent = "Click map to set.";
+  statusBar.textContent = "Destination point cleared. Using default (route end).";
+});
 
+routeSelect.addEventListener("change", loadProfile);
+mapThemeSelect.addEventListener("change", () => {
+  setMapTheme(mapThemeSelect.value);
+});
+trafficColorModeSelect.addEventListener("change", () => {
+  trafficColorMode = trafficColorModeSelect.value;
+  loadProfile().catch((err) => {
+    statusBar.textContent = "Failed loading profile.";
+    console.error(err);
+  });
+});
+
+updateModeButtons();
 loadProfile().catch((err) => {
   statusBar.textContent = "Failed loading profile.";
   console.error(err);
