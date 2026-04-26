@@ -26,10 +26,13 @@ const resultBox = document.getElementById("resultBox");
 const chokeList = document.getElementById("chokeList");
 const locationStatus = document.getElementById("locationStatus");
 const destinationStatus = document.getElementById("destinationStatus");
+const predictTraceBox = document.getElementById("predictTraceBox");
 const modeCurrentBtn = document.getElementById("modeCurrentBtn");
 const modeDestinationBtn = document.getElementById("modeDestinationBtn");
 const mapThemeSelect = document.getElementById("mapThemeSelect");
 const trafficColorModeSelect = document.getElementById("trafficColorMode");
+let predictTraceTimer = null;
+let predictTraceStartedAt = 0;
 
 function congestionColor(v) {
   if (v <= 0.33) return "#2ca94f";
@@ -61,6 +64,96 @@ function toHtmlEscape(value) {
     .replace(/>/g, "&gt;")
     .replace(/\"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+function formatMinutesToMinSec(totalMinutes) {
+  const minutesFloat = Number(totalMinutes);
+  if (!Number.isFinite(minutesFloat) || minutesFloat < 0) {
+    return "N/A";
+  }
+  const totalSeconds = Math.max(0, Math.round(minutesFloat * 60));
+  const mins = Math.floor(totalSeconds / 60);
+  const secs = totalSeconds % 60;
+  return `${mins} min ${String(secs).padStart(2, "0")} sec`;
+}
+
+function renderPredictTrace(state) {
+  const pct = Math.max(0, Math.min(100, Number(state.progressPct) || 0));
+  const title = state.title || "Idle";
+  const stage = state.stage || "Waiting";
+  const elapsed = state.elapsedSec || "0.0";
+  const meta = state.meta || "Ready.";
+  predictTraceBox.innerHTML = [
+    `<div class="trace-row"><span class="trace-title">${toHtmlEscape(title)}</span><span>${toHtmlEscape(`${pct.toFixed(0)}%`)}</span></div>`,
+    `<div class="trace-stage">${toHtmlEscape(stage)}</div>`,
+    `<div class="trace-bar"><div class="trace-fill" style="width:${pct}%;"></div></div>`,
+    `<div class="trace-meta">${toHtmlEscape(meta)} | elapsed ${toHtmlEscape(`${elapsed}s`)}</div>`
+  ].join("");
+}
+
+function startPredictTrace({ route, vehicleClass, startTime, hasDestination }) {
+  if (predictTraceTimer) {
+    clearInterval(predictTraceTimer);
+    predictTraceTimer = null;
+  }
+
+  predictTraceStartedAt = Date.now();
+  const stages = [
+    "Validating selected route, time, and points",
+    "Projecting start point onto baseline bins",
+    "Building model feature vector",
+    "Running Python inference (predict_eta.py)",
+    "Applying destination-aware ETA scaling",
+    "Preparing arrival time and choke points"
+  ];
+
+  renderPredictTrace({
+    title: "Prediction Running",
+    stage: stages[0],
+    progressPct: 2,
+    elapsedSec: "0.0",
+    meta: `route=${route}, vehicle=${vehicleClass}, start=${startTime}, destination=${hasDestination ? "yes" : "no"}`
+  });
+
+  predictTraceTimer = setInterval(() => {
+    const elapsedMs = Date.now() - predictTraceStartedAt;
+    const elapsedSec = (elapsedMs / 1000).toFixed(1);
+    const eased = 1 - Math.exp(-elapsedMs / 1800);
+    const progressPct = Math.min(92, 3 + eased * 89);
+    const stageIdx = Math.min(stages.length - 1, Math.floor((progressPct / 100) * stages.length));
+    renderPredictTrace({
+      title: "Prediction Running",
+      stage: stages[stageIdx],
+      progressPct,
+      elapsedSec,
+      meta: "Backend request in-flight"
+    });
+  }, 250);
+}
+
+function finishPredictTrace({ ok, model, destinationApplied, errorMsg }) {
+  if (predictTraceTimer) {
+    clearInterval(predictTraceTimer);
+    predictTraceTimer = null;
+  }
+  const elapsedSec = ((Date.now() - predictTraceStartedAt) / 1000).toFixed(1);
+  if (ok) {
+    renderPredictTrace({
+      title: "Prediction Complete",
+      stage: "Model inference finished successfully",
+      progressPct: 100,
+      elapsedSec,
+      meta: `model=${model || "unknown"}, destinationApplied=${destinationApplied ? "yes" : "no"}`
+    });
+  } else {
+    renderPredictTrace({
+      title: "Prediction Failed",
+      stage: "Backend returned an error",
+      progressPct: 100,
+      elapsedSec,
+      meta: errorMsg || "Unknown error"
+    });
+  }
 }
 
 function setMapTheme(theme) {
@@ -164,6 +257,7 @@ async function predictEta() {
 
   const url = `/api/predict-eta?${urlParams}`;
   resultBox.textContent = "Predicting...";
+  startPredictTrace({ route, vehicleClass, startTime, hasDestination: Boolean(destinationPoint) });
 
   const res = await fetch(url);
   const data = await res.json();
@@ -171,26 +265,38 @@ async function predictEta() {
   if (!res.ok || data.error) {
     resultBox.textContent = `Prediction failed: ${data.error || "Unknown error"}`;
     chokeList.textContent = "No choke points.";
+    finishPredictTrace({ ok: false, errorMsg: data.error || "Unknown error" });
     return;
   }
 
   // Format times
   const startTimeFormatted = toHtmlEscape(startTime);
   const arrivalTime = toHtmlEscape(data.estimated_arrival_time);
+  const startPosPct = (Number(data.progress_ratio) * 100).toFixed(1);
+  const destPosPct = data.destination_progress_ratio !== undefined
+    ? `${(Number(data.destination_progress_ratio) * 100).toFixed(1)}%`
+    : "N/A";
+  const tripSpanPct = data.requested_trip_span_ratio !== undefined
+    ? `${(Number(data.requested_trip_span_ratio) * 100).toFixed(1)}%`
+    : `${(Number(data.remaining_ratio_to_route_end ?? 0) * 100).toFixed(1)}%`;
+  const directionText = data.destination_ahead === undefined
+    ? "N/A"
+    : (data.destination_ahead ? "Up" : "Down");
 
   resultBox.innerHTML = [
     `<b>Start Time:</b> ${startTimeFormatted}`,
     `<b>Arrival Time:</b> ${arrivalTime}`,
-    `<b>ETA:</b> ${toHtmlEscape(data.estimated_eta_min)} min`,
-    `<b>ETA To Route End:</b> ${toHtmlEscape(data.estimated_eta_min_to_route_end ?? data.estimated_eta_min)} min`,
+    `<b>ETA:</b> ${toHtmlEscape(formatMinutesToMinSec(data.estimated_eta_min))}`,
     `<b>Model:</b> ${toHtmlEscape(data.model)}`,
-    `<b>Progress Ratio:</b> ${(Number(data.progress_ratio) * 100).toFixed(1)}%`,
-    `<b>Destination Applied:</b> ${data.destination_applied ? "Yes" : "No"}`,
-    `<b>Destination Progress:</b> ${data.destination_progress_ratio !== undefined ? `${(Number(data.destination_progress_ratio) * 100).toFixed(1)}%` : "N/A"}`,
+    `<b>Start Position on Route:</b> ${startPosPct}%`,
+    `<b>Destination Position on Route:</b> ${destPosPct}`,
+    `<b>Requested Trip Span:</b> ${tripSpanPct}`,
+    `<b>Destination Direction:</b> ${directionText}`,
     `<b>Point-to-baseline:</b> ${toHtmlEscape(data.selected_point_to_baseline_m ?? 0)} m`
   ].join("<br>");
 
   renderChokes(data.choke_points_ahead || []);
+  finishPredictTrace({ ok: true, model: data.model, destinationApplied: data.destination_applied });
 }
 
 // Handle map clicks based on current mode
