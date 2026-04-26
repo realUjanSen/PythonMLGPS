@@ -16,27 +16,69 @@
   <main class="layout">
     <aside class="panel controls">
       <h2>Query</h2>
-      <label for="routeSelect">Route</label>
-      <select id="routeSelect">
-        <option value="morning">Morning (Home to Office)</option>
-        <option value="evening">Evening (Office to Home)</option>
-      </select>
+      <div class="form-row">
+        <div>
+          <label for="routeSelect">Route</label>
+          <select id="routeSelect">
+            <option value="morning">Morning (Home to Office)</option>
+            <option value="evening">Evening (Office to Home)</option>
+          </select>
+        </div>
+        <div>
+          <label for="mapThemeSelect">Map Theme</label>
+          <select id="mapThemeSelect">
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+          </select>
+        </div>
+      </div>
 
-      <label for="vehicleSelect">Vehicle Class</label>
-      <select id="vehicleSelect">
-        <option value="Shuttle">Shuttle</option>
-        <option value="Public Bus">Public Bus</option>
-      </select>
+      <div class="form-row">
+        <div>
+          <label for="vehicleSelect">Vehicle Class</label>
+          <select id="vehicleSelect">
+            <option value="Shuttle">Shuttle</option>
+            <option value="Public Bus">Public Bus</option>
+          </select>
+        </div>
+        <div>
+          <label for="startTime">Start Time (HH:MM)</label>
+          <input id="startTime" type="time" value="08:15">
+        </div>
+      </div>
 
-      <label for="startTime">Start Time (HH:MM)</label>
-      <input id="startTime" type="time" value="08:15">
+      <h3>Point Selection Mode</h3>
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px;">
+        <button id="modeCurrentBtn" type="button" style="background: #14a44d;">Start Point</button>
+        <button id="modeDestinationBtn" type="button" style="background: #7a8797;">Destination Point</button>
+      </div>
+
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px;">
+        <div>
+          <h3 style="margin: 0 0 4px; font-size: 14px;">Start Point</h3>
+          <div id="locationStatus" style="font-size: 12px; color: #666; padding: 8px; background: #f9fbfe; border-radius: 4px;">Click map to set.</div>
+        </div>
+        <div>
+          <h3 style="margin: 0 0 4px; font-size: 14px;">Destination Point</h3>
+          <div id="destinationStatus" style="font-size: 12px; color: #666; padding: 8px; background: #f9fbfe; border-radius: 4px;">Click map to set.</div>
+        </div>
+      </div>
 
       <button id="predictBtn" type="button">Predict ETA From Selected Point</button>
-      <button id="clearPointBtn" type="button">Clear Point</button>
+
+      <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+        <button id="clearPointBtn" type="button">Clear Start</button>
+        <button id="clearDestinationBtn" type="button">Clear Destination</button>
+      </div>
 
       <div id="resultBox" class="result">Click a point on the map to set your current location on baseline.</div>
 
       <h3>Traffic Legend</h3>
+      <label for="trafficColorMode">Traffic Color Mode</label>
+      <select id="trafficColorMode">
+        <option value="banded">3 Bands</option>
+        <option value="gradient">Continuous Gradient</option>
+      </select>
       <div class="legend">
         <span><i class="swatch green"></i> Low congestion</span>
         <span><i class="swatch yellow"></i> Medium congestion</span>

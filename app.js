@@ -24,11 +24,6 @@ const TRAFFIC_BUCKET_COLORS = {
   red: "#d62f2f"
 };
 
-const BASELINE_SESSION_IDS = {
-  morning: 43,
-  evening: 35
-};
-
 function createDefaultRouteVariants() {
   const variants = {};
   ROUTE_VARIANT_KEYS.forEach((key) => {
@@ -48,9 +43,7 @@ const state = {
   renderLayers: new Map(),
   undoStack: [],
   shouldAutoFit: true,
-  zoomLocked: false,
   deletedSessionIds: new Set(),
-  csvSource: "original",
   routeVariants: createDefaultRouteVariants(),
   selectedVariantKey: "route2",
   showVariants: true,
@@ -60,14 +53,10 @@ const state = {
   trafficThreshold: 65,
   snapThresholdMeters: 18,
   currentTrafficInfo: null,
-  pointInspectorMode: false,
-  inspectorMarker: null,
   isErasing: false,
   eraserPreview: null,
   eraserLastEraseTime: 0,
   eraserThrottleMs: 350,
-  eraserDragTotalErased: 0,
-  eraserDragTouchedSessionIds: new Set(),
   renderDebounceTimer: null,
   renderDebounceMs: 150
 };
@@ -76,28 +65,13 @@ function $(id) {
   return document.getElementById(id);
 }
 
-function getDeletedSessionStorageKey() {
-  return `deletedSessionIds_${state.csvSource}`;
-}
-
 async function getCsvFileList() {
   try {
-    const response = await fetch(`/api/list-csv-files?source=${encodeURIComponent(state.csvSource)}`);
+    const response = await fetch("/api/list-csv-files");
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
     }
-    const payload = await response.json();
-    if (!Array.isArray(payload)) return [];
-
-    return payload.map((item) => {
-      if (typeof item === "string") {
-        return { fileName: item, urlPath: `csv/${item}` };
-      }
-      return {
-        fileName: item.fileName || item.name,
-        urlPath: item.urlPath || `csv/${item.fileName || item.name}`
-      };
-    }).filter((item) => item.fileName && item.urlPath);
+    return await response.json();
   } catch (error) {
     console.warn("Failed to fetch CSV file list:", error);
     return [];
@@ -162,27 +136,7 @@ function rebuildPointRows(session) {
   session.pointRows = session.rows.filter((row) => row.hasCoords);
 }
 
-function normalizeHeaderName(value) {
-  return String(value || "").toLowerCase().replace(/[^a-z0-9]/g, "");
-}
-
-function normalizeVehicleClass(value) {
-  const raw = String(value || "").trim().toLowerCase();
-  if (!raw) return "";
-  if (raw.includes("shuttle")) return "Shuttle";
-  if (raw.includes("public") && raw.includes("bus")) return "Public Bus";
-  if (raw === "bus" || raw === "publicbus") return "Public Bus";
-  return "";
-}
-
-function getDefaultVehicleClassForFile(fileName) {
-  const direction = detectRouteDirectionFromFileName(fileName);
-  if (direction === "morning") return "Shuttle";
-  if (direction === "evening") return "Public Bus";
-  return "";
-}
-
-function parseCsv(text, fileName, sessionId = fileName) {
+function parseCsv(text, fileName) {
   const rows = text
     .replace(/\r/g, "")
     .split("\n")
@@ -197,14 +151,6 @@ function parseCsv(text, fileName, sessionId = fileName) {
   const lngIdx = headers.findIndex((h) => h.trim().toLowerCase() === "longitude");
   const timeIdx = headers.findIndex((h) => h.trim().toLowerCase() === "timestamp");
   const accIdx = headers.findIndex((h) => h.trim().toLowerCase().startsWith("accuracy"));
-  const vehicleClassHeaderSet = new Set([
-    "vehicleclass",
-    "vehicletype",
-    "busclass",
-    "bustype",
-    "class"
-  ]);
-  const classIdx = headers.findIndex((h) => vehicleClassHeaderSet.has(normalizeHeaderName(h)));
 
   if (latIdx === -1 || lngIdx === -1) {
     throw new Error(`Latitude/Longitude column missing in ${fileName}`);
@@ -212,7 +158,6 @@ function parseCsv(text, fileName, sessionId = fileName) {
 
   const parsedRows = [];
   const pointRows = [];
-  let inferredClass = "";
 
   for (let i = 1; i < rows.length; i += 1) {
     const cells = parseCsvLine(rows[i]);
@@ -235,24 +180,17 @@ function parseCsv(text, fileName, sessionId = fileName) {
     if (row.hasCoords) {
       pointRows.push(row);
     }
-
-    if (!inferredClass && classIdx >= 0) {
-      inferredClass = normalizeVehicleClass(cells[classIdx]);
-    }
   }
 
-  const savedClass = getSavedClass(sessionId);
-  const resolvedClass = savedClass || inferredClass || getDefaultVehicleClassForFile(fileName);
-
   const session = {
-    id: sessionId,
+    id: fileName,
     fileName,
     headers,
     rows: parsedRows,
     pointRows,
     rowByIndex: new Map(),
-    classLabel: resolvedClass,
-    morningVariant: getSavedMorningVariant(sessionId),
+    classLabel: getSavedClass(fileName),
+    morningVariant: getSavedMorningVariant(fileName),
     latIdx,
     lngIdx
   };
@@ -305,30 +243,6 @@ function detectRouteName(fileName) {
   if (fileName.includes("Home_to_Office")) return "Home to Office";
   if (fileName.includes("Office_to_Home")) return "Office to Home";
   return "Unknown";
-}
-
-function detectRouteDirectionFromFileName(fileName) {
-  if (fileName.includes("Home_to_Office")) return "morning";
-  if (fileName.includes("Office_to_Home")) return "evening";
-  return "unknown";
-}
-
-function getSessionIdFromFileName(fileName) {
-  const match = String(fileName || "").match(/session_(\d+)_/i);
-  if (!match) return null;
-  const id = Number(match[1]);
-  return Number.isFinite(id) ? id : null;
-}
-
-function findBaselineSession(direction) {
-  const refId = BASELINE_SESSION_IDS[direction];
-  if (!refId) return null;
-  return (
-    state.sessions.find((s) => {
-      if (getSessionIdFromFileName(s.fileName) !== refId) return false;
-      return detectRouteDirectionFromFileName(s.fileName) === direction;
-    }) || null
-  );
 }
 
 function clamp(value, min, max) {
@@ -434,13 +348,15 @@ function renderSessionList() {
 function renderMeta() {
   const meta = $("sessionMeta");
   const classSelect = $("classSelect");
+  const morningVariantSelect = $("morningVariantSelect");
   const session = getSelectedSession();
 
-  if (!meta || !classSelect) return;
+  if (!meta || !classSelect || !morningVariantSelect) return;
 
   if (!session) {
     meta.textContent = "No session selected.";
     classSelect.value = "";
+    morningVariantSelect.value = "";
     return;
   }
 
@@ -455,11 +371,13 @@ function renderMeta() {
     `<tr><td>End Time</td><td>${lastRow?.timestamp || "N/A"}</td></tr>`,
     `<tr><td>Total Rows</td><td>${session.rows.length}</td></tr>`,
     `<tr><td>GPS Points</td><td>${session.pointRows.length}</td></tr>`,
+    `<tr><td>Morning Variant</td><td>${getMorningVariantLabel(session.morningVariant)}</td></tr>`,
     `<tr><td>Columns</td><td>${session.headers.join(", ")}</td></tr>`,
     "</table>"
   ].join("");
 
   classSelect.value = session.classLabel || "";
+  morningVariantSelect.value = session.morningVariant || "";
 }
 
 function clearMapLayers() {
@@ -505,27 +423,7 @@ function renderMapImmediate() {
     state.renderLayers.set(session.id, group);
   });
 
-  const selectedDirection = selected ? detectRouteDirectionFromFileName(selected.fileName) : "unknown";
-  if (selectedDirection === "morning" || selectedDirection === "evening") {
-    const baseline = findBaselineSession(selectedDirection);
-    const baselineSegments = baseline ? getSegments(baseline) : [];
-    if (baseline && baselineSegments.length > 0) {
-      const baselineGroup = L.layerGroup();
-      baselineSegments.forEach((coords) => {
-        L.polyline(coords, {
-          color: "#0f172a",
-          weight: 3,
-          opacity: 0.9,
-          dashArray: "10 8"
-        })
-          .bindTooltip(`Baseline session ${getSessionIdFromFileName(baseline.fileName)} (${selectedDirection})`)
-          .addTo(baselineGroup);
-      });
-      baselineGroup.addTo(state.map);
-      state.renderLayers.set("__baseline__", baselineGroup);
-    }
-  }
-
+  renderRouteVariants();
   renderTrafficOverlay(selected);
   renderAnalysisMarkers();
 
@@ -539,6 +437,7 @@ function renderMapImmediate() {
     state.map.setView(firstCenter, 14);
   }
 
+  renderRouteStats();
   renderTrafficStats(selected);
   state.shouldAutoFit = false;
 }
@@ -1008,98 +907,16 @@ function getEraseTargetSessions() {
   });
 }
 
-function getVisibleSessions() {
-  const selected = getSelectedSession();
-  if (!selected) return [];
-  if (!state.showAll) return [selected];
-  return state.sessions.filter((session) => getSegments(session).length > 0);
-}
-
-function clearInspectorMarker() {
-  if (state.inspectorMarker && state.map) {
-    try {
-      state.map.removeLayer(state.inspectorMarker);
-    } catch (e) {}
-    state.inspectorMarker = null;
-  }
-}
-
-function showInspectorMarker(latlng) {
-  clearInspectorMarker();
-  if (!state.map) return;
-  state.inspectorMarker = L.circleMarker(latlng, {
-    radius: 6,
-    color: "#101820",
-    weight: 2,
-    fillColor: "#ffffff",
-    fillOpacity: 1
-  }).addTo(state.map);
-}
-
-function findNearestVisiblePoint(latlng, maxDistanceMeters = 60) {
-  const targets = getVisibleSessions();
-  if (targets.length === 0) return null;
-
-  let best = null;
-  const latRad = (latlng.lat * Math.PI) / 180;
-  const metersPerLat = 111320;
-  const metersPerLng = 111320 * Math.max(0.2, Math.cos(latRad));
-
-  targets.forEach((session) => {
-    for (let i = 0; i < session.pointRows.length; i += 1) {
-      const row = session.pointRows[i];
-      const dLatMeters = (row.lat - latlng.lat) * metersPerLat;
-      const dLngMeters = (row.lng - latlng.lng) * metersPerLng;
-      const distance = Math.sqrt((dLatMeters * dLatMeters) + (dLngMeters * dLngMeters));
-      if (distance > maxDistanceMeters) continue;
-      if (!best || distance < best.distanceMeters) {
-        best = {
-          session,
-          row,
-          distanceMeters: distance
-        };
-      }
-    }
-  });
-
-  return best;
-}
-
-function inspectPointAt(latlng) {
-  const nearest = findNearestVisiblePoint(latlng, 60);
-  if (!nearest) {
-    clearInspectorMarker();
-    setStatus("No nearby route point found. Click closer to a route line.", true);
-    return;
-  }
-
-  const pointLatLng = [nearest.row.lat, nearest.row.lng];
-  showInspectorMarker(pointLatLng);
-  const timeText = nearest.row.timestamp ? `, time: ${nearest.row.timestamp}` : "";
-  setStatus(
-    `Point belongs to session: ${nearest.session.fileName} (distance: ${formatNumber(nearest.distanceMeters, 1)}m, row: ${nearest.row.index + 1}${timeText}).`
-  );
-}
-
 function eraseAroundSession(session, latlng, radiusMeters, minChunk) {
   if (!session || session.pointRows.length === 0) return 0;
 
   const eraseSet = new Set();
-  // Fast local meters conversion avoids expensive map.distance calls per point.
-  const latRad = (latlng.lat * Math.PI) / 180;
-  const metersPerLat = 111320;
-  const metersPerLng = 111320 * Math.max(0.2, Math.cos(latRad));
-  const radiusSquared = radiusMeters * radiusMeters;
-
-  for (let idx = 0; idx < session.pointRows.length; idx += 1) {
-    const row = session.pointRows[idx];
-    const dLatMeters = (row.lat - latlng.lat) * metersPerLat;
-    const dLngMeters = (row.lng - latlng.lng) * metersPerLng;
-    const dSquared = dLatMeters * dLatMeters + dLngMeters * dLngMeters;
-    if (dSquared <= radiusSquared) {
+  session.pointRows.forEach((row, idx) => {
+    const d = state.map.distance(latlng, [row.lat, row.lng]);
+    if (d <= radiusMeters) {
       eraseSet.add(idx);
     }
-  }
+  });
 
   if (eraseSet.size === 0) return 0;
 
@@ -1170,18 +987,10 @@ function eraseAround(latlng, options = {}) {
     if (erased > 0) {
       touchedSessions += 1;
       totalErased += erased;
-      if (options.suppressUndo) {
-        state.eraserDragTouchedSessionIds.add(session.id);
-      }
     }
   });
 
   if (totalErased === 0) return;
-
-  if (options.suppressUndo) {
-    state.eraserDragTotalErased += totalErased;
-    return;
-  }
 
   state.shouldAutoFit = !options.suppressUndo;
   renderMeta();
@@ -1192,7 +1001,6 @@ function eraseAround(latlng, options = {}) {
 
 function updateModeIndicators() {
   const eraserOn = Boolean($("eraserMode")?.checked);
-  const inspectorOn = Boolean($("pointInspectorMode")?.checked);
   const editOn = Boolean($("waypointEditMode")?.checked);
   const midpointOn = Boolean($("midpointMode")?.checked);
 
@@ -1212,7 +1020,6 @@ function updateModeIndicators() {
   let text = "Normal mode";
   if (editOn && midpointOn) text = "Waypoint edit + midpoint insert";
   else if (editOn) text = "Waypoint edit mode";
-  else if (inspectorOn) text = "Point inspector mode";
   else if (eraserOn) text = "Eraser mode";
 
   if (editOn && eraserOn) {
@@ -1237,16 +1044,14 @@ async function deleteSelectedSession() {
   if (!ok) return;
 
   try {
-    const response = await fetch(
-      `/api/delete-csv?source=${encodeURIComponent(state.csvSource)}&file=${encodeURIComponent(session.fileName)}`
-    );
+    const response = await fetch(`/api/delete-csv?file=${encodeURIComponent(session.fileName)}`);
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
     }
     
     setStatus(`Deleted ${session.fileName} from disk.`);
     state.deletedSessionIds.add(session.id);
-    localStorage.setItem(getDeletedSessionStorageKey(), JSON.stringify(Array.from(state.deletedSessionIds)));
+    localStorage.setItem("deletedSessionIds", JSON.stringify(Array.from(state.deletedSessionIds)));
     state.sessions = state.sessions.filter((s) => s.id !== session.id);
     state.undoStack = [];
 
@@ -1273,17 +1078,7 @@ function undoErase() {
   }
 
   restoreRemovedState(snapshot);
-  // Re-calculate pointRows to ensure they match the restored rows
-  if (snapshot.kind === "multi" && snapshot.sessions) {
-    snapshot.sessions.forEach((item) => {
-      const session = state.sessions.find((s) => s.id === item.sessionId);
-      if (session) rebuildPointRows(session);
-    });
-  } else {
-    const session = state.sessions.find((s) => s.id === snapshot.sessionId);
-    if (session) rebuildPointRows(session);
-  }
-  state.shouldAutoFit = false;
+  state.shouldAutoFit = true;
   renderMeta();
   forceRenderMap();
   setStatus("Undo complete.");
@@ -1670,9 +1465,9 @@ function ensureBaselineFromSelectedSession() {
 }
 
 async function loadSessions() {
-  setStatus(`Loading ${state.csvSource} CSV sessions...`);
+  setStatus("Loading CSV sessions...");
 
-  state.deletedSessionIds = new Set(JSON.parse(localStorage.getItem(getDeletedSessionStorageKey()) || "[]"));
+  state.deletedSessionIds = new Set(JSON.parse(localStorage.getItem("deletedSessionIds") || "[]"));
   state.sessions = [];
   state.undoStack = [];
   state.shouldAutoFit = true;
@@ -1680,17 +1475,16 @@ async function loadSessions() {
   const CSV_FILES = await getCsvFileList();
   const skipped = [];
 
-  for (const entry of CSV_FILES) {
-    const fileName = entry.fileName;
+  for (const fileName of CSV_FILES) {
     try {
-      const response = await fetch(entry.urlPath);
+      const response = await fetch(`csv/${fileName}`);
       if (!response.ok) {
         skipped.push(fileName);
         continue;
       }
 
       const text = await response.text();
-      const session = parseCsv(text, fileName, `${state.csvSource}:${fileName}`);
+      const session = parseCsv(text, fileName);
       if (!state.deletedSessionIds.has(session.id)) {
         state.sessions.push(session);
       }
@@ -1703,7 +1497,7 @@ async function loadSessions() {
     renderSessionList();
     renderMeta();
     renderMap();
-    setStatus(`No ${state.csvSource} CSV sessions loaded. Run from a local web server.`, true);
+    setStatus("No CSV sessions loaded. Run from a local web server.", true);
     return;
   }
 
@@ -1715,10 +1509,11 @@ async function loadSessions() {
 
   renderSessionList();
   renderMeta();
+  ensureBaselineFromSelectedSession();
   renderMap();
 
   const skippedMsg = skipped.length ? ` Skipped ${skipped.length} missing/unreadable file(s).` : "";
-  setStatus(`Loaded ${state.sessions.length} ${state.csvSource} session file(s).${skippedMsg}`);
+  setStatus(`Loaded ${state.sessions.length} session file(s).${skippedMsg}`);
 }
 
 async function loadFromPickedFiles(fileList) {
@@ -1756,6 +1551,7 @@ async function loadFromPickedFiles(fileList) {
 
   renderSessionList();
   renderMeta();
+  ensureBaselineFromSelectedSession();
   renderMap();
   setStatus(`Loaded ${state.sessions.length} selected CSV file(s).`);
 }
@@ -1772,10 +1568,6 @@ function initMap() {
   }).addTo(state.map);
 
   state.map.on("click", (event) => {
-    if (state.pointInspectorMode) {
-      inspectPointAt(event.latlng);
-      return;
-    }
     if (state.waypointEditMode) return;
     if (!$("eraserMode")?.checked) return;
     if (event.originalEvent?.ctrlKey) return; // Ctrl+click: pan, not erase
@@ -1784,19 +1576,16 @@ function initMap() {
   });
 
   // Drag-to-erase: mousedown starts erasing and disables map dragging
-  // Middle-click drag: pan the map normally, don't erase
+  // Ctrl+drag: pan the map normally, don't erase
   state.map.on("mousedown", (event) => {
-    if (state.pointInspectorMode) return;
     if (state.waypointEditMode) return;
     if (!$("eraserMode")?.checked) return;
-    if (event.originalEvent?.button === 1) return; // Middle-click: allow map panning
+    if (event.originalEvent?.ctrlKey) return; // Ctrl+drag: allow map panning
 
     const targets = getEraseTargetSessions();
     if (targets.length === 0) return;
 
     state.isErasing = true;
-    state.eraserDragTotalErased = 0;
-    state.eraserDragTouchedSessionIds.clear();
     // Record one undo snapshot for this drag sweep.
     const snapshot = targets.length === 1
       ? snapshotRemovedState(targets[0])
@@ -1814,7 +1603,6 @@ function initMap() {
 
   state.map.on("mousemove", (event) => {
     // live preview when hovering eraser mode
-    if (state.pointInspectorMode) return;
     if (!$("eraserMode")?.checked) return;
     if (!state.isErasing) {
       // show preview following cursor
@@ -1834,26 +1622,13 @@ function initMap() {
   });
 
   state.map.on("mouseup", () => {
-    if (state.pointInspectorMode) return;
     if (!state.isErasing) return;
     state.isErasing = false;
     try {
       if (state.map.dragging && !state.map.dragging.enabled()) state.map.dragging.enable();
     } catch (e) {}
     removeEraserPreview();
-    if (state.eraserDragTotalErased > 0) {
-      const touchedCount = state.eraserDragTouchedSessionIds.size;
-      const selected = getSelectedSession();
-      const scopeText = touchedCount > 1
-        ? `${touchedCount} sessions`
-        : (selected?.fileName || "selected session");
-      state.shouldAutoFit = false;
-      renderMeta();
-      setStatus(`Erased ${state.eraserDragTotalErased} point(s) and removed matching CSV row(s) across ${scopeText}; routes reconnected.`);
-    }
     forceRenderMap();
-    state.eraserDragTotalErased = 0;
-    state.eraserDragTouchedSessionIds.clear();
   });
 }
 
@@ -1864,27 +1639,6 @@ function wireEvents() {
   $("saveCleanedBtn")?.addEventListener("click", saveCleanedSession);
   $("downloadBtn")?.addEventListener("click", downloadCleanedCsv);
   $("deleteSessionBtn")?.addEventListener("click", deleteSelectedSession);
-  
-  // Zoom lock toggle
-  $("zoomLockToggle")?.addEventListener("change", (e) => {
-    state.zoomLocked = e.target.checked;
-    if (state.map?.scrollWheelZoom) {
-      state.zoomLocked ? state.map.scrollWheelZoom.disable() : state.map.scrollWheelZoom.enable();
-    }
-  });
-
-  // Ctrl+Z for undo
-  document.addEventListener("keydown", (e) => {
-    if ((e.ctrlKey || e.metaKey) && e.key === "z") {
-      e.preventDefault();
-      undoErase();
-    }
-  });
-
-  $("csvSourceSelect")?.addEventListener("change", (e) => {
-    state.csvSource = e.target.value === "snapped" ? "snapped" : "original";
-    loadSessions();
-  });
 
   $("showAllToggle")?.addEventListener("change", (e) => {
     state.showAll = e.target.checked;
@@ -1894,32 +1648,73 @@ function wireEvents() {
 
   $("eraserRadius")?.addEventListener("input", handleRadiusChange);
   $("eraserMode")?.addEventListener("change", updateModeIndicators);
-  $("pointInspectorMode")?.addEventListener("change", (e) => {
-    state.pointInspectorMode = e.target.checked;
-    if (state.pointInspectorMode) {
-      state.isErasing = false;
-      removeEraserPreview();
-      setStatus("Point Inspector enabled. Click near any route point to identify its session.");
-    } else {
-      clearInspectorMarker();
-      setStatus("Point Inspector disabled.");
-    }
-    updateModeIndicators();
-  });
 
   $("classSelect")?.addEventListener("change", (e) => {
     const session = getSelectedSession();
     if (!session) return;
 
     session.classLabel = e.target.value;
-    saveClass(session.id, e.target.value);
+    saveClass(session.fileName, e.target.value);
     setStatus(`Saved class '${session.classLabel || "Unclassified"}' for ${session.fileName}.`);
+  });
+
+  $("morningVariantSelect")?.addEventListener("change", (e) => {
+    const session = getSelectedSession();
+    if (!session) return;
+
+    session.morningVariant = e.target.value;
+    saveMorningVariant(session.fileName, e.target.value);
+    renderMeta();
+    setStatus(`Saved morning variant '${getMorningVariantLabel(session.morningVariant)}' for ${session.fileName}.`);
   });
 
   $("filePicker")?.addEventListener("change", (e) => {
     loadFromPickedFiles(e.target.files);
   });
 
+  $("routeVariantSelect")?.addEventListener("change", (e) => {
+    state.selectedVariantKey = e.target.value;
+    state.shouldAutoFit = false;
+    renderMap();
+  });
+
+  $("showVariantsToggle")?.addEventListener("change", (e) => {
+    state.showVariants = e.target.checked;
+    state.shouldAutoFit = false;
+    renderMap();
+  });
+
+  $("waypointEditMode")?.addEventListener("change", (e) => {
+    state.waypointEditMode = e.target.checked;
+    if (!state.waypointEditMode) {
+      const mid = $("midpointMode");
+      if (mid) {
+        mid.checked = false;
+      }
+      state.midpointMode = false;
+    }
+    updateModeIndicators();
+    state.shouldAutoFit = false;
+    renderMap();
+  });
+
+  $("midpointMode")?.addEventListener("change", (e) => {
+    state.midpointMode = e.target.checked;
+    if (state.midpointMode && !state.waypointEditMode) {
+      const edit = $("waypointEditMode");
+      if (edit) {
+        edit.checked = true;
+      }
+      state.waypointEditMode = true;
+    }
+    updateModeIndicators();
+    state.shouldAutoFit = false;
+    renderMap();
+  });
+
+  $("snapThreshold")?.addEventListener("change", (e) => {
+    state.snapThresholdMeters = Math.max(2, Number(e.target.value) || 18);
+  });
 
   $("showTrafficToggle")?.addEventListener("change", (e) => {
     state.showTraffic = e.target.checked;
@@ -1934,26 +1729,34 @@ function wireEvents() {
     renderMap();
   });
 
+  $("captureVariantBtn")?.addEventListener("click", captureSelectedSessionAsVariant);
+  $("cloneBaselineBtn")?.addEventListener("click", cloneBaselineToOthers);
+  $("resetVariantBtn")?.addEventListener("click", resetSelectedVariant);
+  $("snapToVariantBtn")?.addEventListener("click", snapSelectedSessionToVariant);
 }
 
 async function bootstrap() {
   loadRouteVariantsFromStorage();
+
+  const routeSelect = $("routeVariantSelect");
+  if (routeSelect) {
+    routeSelect.value = state.selectedVariantKey;
+  }
+
+  const showVariantsToggle = $("showVariantsToggle");
+  if (showVariantsToggle) {
+    showVariantsToggle.checked = state.showVariants;
+  }
 
   const showTrafficToggle = $("showTrafficToggle");
   if (showTrafficToggle) {
     showTrafficToggle.checked = state.showTraffic;
   }
 
-  const csvSourceSelect = $("csvSourceSelect");
-  if (csvSourceSelect) {
-    csvSourceSelect.value = state.csvSource;
+  const snapThreshold = $("snapThreshold");
+  if (snapThreshold) {
+    snapThreshold.value = String(state.snapThresholdMeters);
   }
-
-  const pointInspectorMode = $("pointInspectorMode");
-  if (pointInspectorMode) {
-    pointInspectorMode.checked = state.pointInspectorMode;
-  }
-
 
   const trafficThreshold = $("trafficThreshold");
   if (trafficThreshold) {
@@ -1964,6 +1767,7 @@ async function bootstrap() {
   initMap();
   wireEvents();
   updateModeIndicators();
+  renderRouteStats();
   loadSessions();
 }
 

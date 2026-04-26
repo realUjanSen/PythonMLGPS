@@ -17,6 +17,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--progress-m", type=float, default=None, help="Current progress in meters from route start.")
     parser.add_argument("--lat", type=float, default=None, help="Optional current latitude on/near baseline polyline.")
     parser.add_argument("--lng", type=float, default=None, help="Optional current longitude on/near baseline polyline.")
+    parser.add_argument("--dest-lat", type=float, default=None, help="Optional destination latitude on/near baseline polyline.")
+    parser.add_argument("--dest-lng", type=float, default=None, help="Optional destination longitude on/near baseline polyline.")
     parser.add_argument("--vehicle-class", default=None, choices=["Shuttle", "Public Bus"], help="Vehicle class.")
     parser.add_argument("--weekday", type=int, default=None, help="Weekday 0=Mon..6=Sun (defaults to today).")
     parser.add_argument("--offroute-m", type=float, default=0.0, help="Current off-route distance in meters.")
@@ -89,6 +91,14 @@ def main() -> None:
     if args.lat is not None and args.lng is not None:
         progress_ratio, selected_bin, selected_point_dist_m = nearest_progress_ratio_from_latlng(profile, float(args.lat), float(args.lng))
 
+    destination_bin = None
+    destination_progress_ratio = None
+    destination_point_dist_m = None
+    if args.dest_lat is not None and args.dest_lng is not None:
+        destination_progress_ratio, destination_bin, destination_point_dist_m = nearest_progress_ratio_from_latlng(
+            profile, float(args.dest_lat), float(args.dest_lng)
+        )
+
     bin_idx = int(np.clip(progress_ratio * max(1, len(profile) - 1), 0, len(profile) - 1))
     row = profile.iloc[bin_idx]
 
@@ -106,7 +116,17 @@ def main() -> None:
 
     feature_cols = bundle["features"]
     x = pd.DataFrame([{k: feature_row[k] for k in feature_cols}])
-    eta_min = float(model.predict(x)[0])
+    eta_min_full_route = max(0.0, float(model.predict(x)[0]))
+
+    eta_min = eta_min_full_route
+    remaining_to_route_end = max(0.0, 1.0 - progress_ratio)
+    remaining_to_destination = None
+    if destination_progress_ratio is not None:
+        remaining_to_destination = max(0.0, destination_progress_ratio - progress_ratio)
+        if remaining_to_route_end > 1e-9:
+            eta_min = eta_min_full_route * (remaining_to_destination / remaining_to_route_end)
+        else:
+            eta_min = 0.0
     eta_min = max(0.0, eta_min)
 
     start_dt = datetime.combine(datetime.today().date(), datetime.strptime(args.start_time, "%H:%M").time())
@@ -117,7 +137,9 @@ def main() -> None:
         "vehicle_class": vehicle_class,
         "start_time": args.start_time,
         "progress_ratio": progress_ratio,
+        "remaining_ratio_to_route_end": round(float(remaining_to_route_end), 6),
         "estimated_eta_min": round(eta_min, 2),
+        "estimated_eta_min_to_route_end": round(eta_min_full_route, 2),
         "estimated_arrival_time": eta_dt.strftime("%H:%M:%S"),
         "model": bundle.get("best_model_name", "unknown"),
         "support_at_position": int(row["session_support"]),
@@ -126,6 +148,15 @@ def main() -> None:
     if selected_bin is not None:
         result["selected_bin_idx"] = int(selected_bin)
         result["selected_point_to_baseline_m"] = round(float(selected_point_dist_m), 2)
+
+    if destination_bin is not None:
+        result["destination_bin_idx"] = int(destination_bin)
+        result["destination_progress_ratio"] = round(float(destination_progress_ratio), 6)
+        result["destination_point_to_baseline_m"] = round(float(destination_point_dist_m), 2)
+        result["remaining_ratio_to_destination"] = round(float(remaining_to_destination), 6)
+        result["destination_applied"] = True
+    else:
+        result["destination_applied"] = False
 
     choke_path = profiles_dir / "choke_points.csv"
     if choke_path.exists():

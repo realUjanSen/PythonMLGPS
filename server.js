@@ -229,6 +229,9 @@ app.get("/api/predict-eta", (req, res) => {
     if (req.query.lat !== undefined && req.query.lng !== undefined && req.query.lat !== "" && req.query.lng !== "") {
       args.push("--lat", String(req.query.lat), "--lng", String(req.query.lng));
     }
+    if (req.query.dest_lat !== undefined && req.query.dest_lng !== undefined && req.query.dest_lat !== "" && req.query.dest_lng !== "") {
+      args.push("--dest-lat", String(req.query.dest_lat), "--dest-lng", String(req.query.dest_lng));
+    }
 
     execFile("C:/Python313/python.exe", args, { cwd: __dirname, timeout: 20000 }, (error, stdout, stderr) => {
       if (error) {
