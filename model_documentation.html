@@ -301,8 +301,18 @@
         </div>
         <div id="curveMeta" class="small" style="margin-top:8px;">Loading route curve...</div>
         <div class="chart-map-grid" style="margin-top: 8px;">
-          <div style="position: relative; height: 320px;">
-            <canvas id="etaKmChart"></canvas>
+          <div>
+            <div style="position: relative; height: 320px;">
+              <canvas id="etaKmChart"></canvas>
+            </div>
+            <div id="curveControlBar" class="small" style="margin-top:8px;">
+              <label for="curvePositionSlider">Position Along Route</label>
+              <div id="curveSliderWrap" style="position:relative; width:100%; padding-top:4px;">
+                <input id="curvePositionSlider" type="range" min="0" max="0" value="0" step="1" style="width:100%; margin:0;">
+                <div id="curveSliderGuide" style="position:absolute; top:0; bottom:0; width:2px; left:0; background:#1f2f46; opacity:0.8; pointer-events:none;"></div>
+              </div>
+              <div id="curveSelectionInfo" style="margin-top:4px;">Distance traveled: 0.000 km | Remaining ETA: N/A</div>
+            </div>
           </div>
           <div>
             <div id="routeMap" class="route-map"></div>
@@ -320,10 +330,11 @@
           <li>Bin size: 60 meters</li>
           <li>Group-aware split by session ID</li>
           <li>Features: route type, vehicle class, time-of-day, weekday, route progress, off-route distance, local/global speed context, support count</li>
+          <li>Speed feature note: model uses computed speed from snapped progress over time (distance/time), not device satellite speed field.</li>
           <li>Target: ETA remaining minutes</li>
           <li>Training command used: <code>C:/Python313/python.exe train_eta_model.py --bin-meters 60</code></li>
         </ul>
-        <pre class="cli">Sample CLI output from the exact training run:
+        <pre class="cli">CLI output from the exact training run:
 [    0.3s] Loaded 23 valid sessions
 [    0.3s] Using references -> morning: session_043_20260424_081539_Home_to_Office.csv | evening: session_035_20260420_165549_Office_to_Home.csv
 [    0.5s] Snapped sessions: 23/23
@@ -422,6 +433,9 @@ random_forest,29.704005606507174,41.95243304630297,-0.7625459357564113,1880</pre
     let routePolyline = null;
     let routePointMarker = null;
     let currentRouteRows = [];
+    let currentRouteKey = null;
+    let currentCurve = null;
+    let currentCurveSelectedIndex = 0;
 
     const apiBaseCandidates = (() => {
       const sameOrigin = window.location.origin;
@@ -526,8 +540,53 @@ random_forest,29.704005606507174,41.95243304630297,-0.7625459357564113,1880</pre
       }
 
       points.push({ x: totalDistM / 1000, y: 0, progress_pct: 100 });
+      const slopePerKm = [];
+      for (let i = 1; i < points.length; i += 1) {
+        const dx = Math.max(1e-6, points[i].x - points[i - 1].x);
+        const dy = points[i - 1].y - points[i].y;
+        slopePerKm.push(Math.max(0, dy / dx));
+      }
+
+      const smoothSlopePerKm = slopePerKm.map((_, idx) => {
+        const lo = Math.max(0, idx - 2);
+        const hi = Math.min(slopePerKm.length - 1, idx + 2);
+        let total = 0;
+        let count = 0;
+        for (let j = lo; j <= hi; j += 1) {
+          total += slopePerKm[j];
+          count += 1;
+        }
+        return count > 0 ? total / count : slopePerKm[idx];
+      });
+
+      const sorted = [...smoothSlopePerKm].sort((a, b) => a - b);
+      const q = (p) => {
+        if (sorted.length === 0) return 0;
+        const pos = (sorted.length - 1) * p;
+        const lo = Math.floor(pos);
+        const hi = Math.ceil(pos);
+        if (lo === hi) return sorted[lo];
+        const t = pos - lo;
+        return sorted[lo] * (1 - t) + sorted[hi] * t;
+      };
+      const mediumThreshold = q(0.33);
+      const highThreshold = q(0.66);
+
+      const bandPerSegment = smoothSlopePerKm.map((v) => {
+        if (v >= highThreshold) return "slow";
+        if (v >= mediumThreshold) return "medium";
+        return "fast";
+      });
+
       return {
         points,
+        slopePerKm,
+        smoothSlopePerKm,
+        bandPerSegment,
+        thresholds: {
+          medium: mediumThreshold,
+          high: highThreshold
+        },
         profileRows: rows,
         totalDistKm: totalDistM / 1000,
         totalEtaMin: totalTimeMin,
@@ -569,9 +628,12 @@ random_forest,29.704005606507174,41.95243304630297,-0.7625459357564113,1880</pre
       };
     }
 
-    function renderRouteMap(profileRows, selectedDistanceKm = null) {
+    function renderRouteMap(profileRows, selectedDistanceKm = null, options = {}) {
       const rows = Array.isArray(profileRows) ? profileRows : [];
       if (rows.length < 2) return;
+      const routeKey = `${rows.length}:${rows[0].lat.toFixed(6)}:${rows[0].lng.toFixed(6)}:${rows[rows.length - 1].lat.toFixed(6)}:${rows[rows.length - 1].lng.toFixed(6)}`;
+      const routeChanged = routeKey !== currentRouteKey;
+      const shouldFit = options.fitToRoute === true || routeChanged;
 
       const routePoints = rows.map((r) => [Number(r.lat), Number(r.lng)]);
       if (!routeMapInstance) {
@@ -590,24 +652,86 @@ random_forest,29.704005606507174,41.95243304630297,-0.7625459357564113,1880</pre
         weight: 5,
         opacity: 0.95
       }).addTo(routeMapInstance);
-      routeMapInstance.fitBounds(routePolyline.getBounds().pad(0.08));
+      if (shouldFit) {
+        routeMapInstance.fitBounds(routePolyline.getBounds().pad(0.08));
+      }
+      currentRouteKey = routeKey;
 
       if (selectedDistanceKm !== null && Number.isFinite(Number(selectedDistanceKm))) {
-        const pt = routePointAtDistance(rows, selectedDistanceKm);
-        if (pt) {
-          if (routePointMarker) routePointMarker.remove();
-          routePointMarker = L.circleMarker([pt.lat, pt.lng], {
-            radius: 7,
-            color: '#111',
-            weight: 2,
-            fillColor: '#d73434',
-            fillOpacity: 1
-          }).addTo(routeMapInstance);
-          routePointMarker.bindPopup(`Selected point<br>Lat ${pt.lat.toFixed(6)}<br>Lng ${pt.lng.toFixed(6)}`);
-        }
+        updateRouteMarkerAtDistance(rows, selectedDistanceKm);
       }
 
       routeMapInstance.invalidateSize();
+    }
+
+    function updateRouteMarkerAtDistance(profileRows, selectedDistanceKm) {
+      const rows = Array.isArray(profileRows) ? profileRows : [];
+      if (rows.length < 2 || selectedDistanceKm === null || !Number.isFinite(Number(selectedDistanceKm))) return;
+
+      const pt = routePointAtDistance(rows, selectedDistanceKm);
+      if (!pt || !routeMapInstance) return;
+
+      if (!routePointMarker) {
+        routePointMarker = L.circleMarker([pt.lat, pt.lng], {
+          radius: 7,
+          color: '#111',
+          weight: 2,
+          fillColor: '#d73434',
+          fillOpacity: 1
+        }).addTo(routeMapInstance);
+      } else {
+        routePointMarker.setLatLng([pt.lat, pt.lng]);
+      }
+      routePointMarker.bindPopup(`Selected point<br>Lat ${pt.lat.toFixed(6)}<br>Lng ${pt.lng.toFixed(6)}`);
+    }
+
+    function nearestPointIndexByDistance(points, distanceKm) {
+      if (!Array.isArray(points) || points.length === 0) return -1;
+      let bestIdx = 0;
+      let bestDelta = Math.abs(points[0].x - distanceKm);
+      for (let i = 1; i < points.length; i += 1) {
+        const delta = Math.abs(points[i].x - distanceKm);
+        if (delta < bestDelta) {
+          bestDelta = delta;
+          bestIdx = i;
+        }
+      }
+      return bestIdx;
+    }
+
+    function updateCurveSelection(curve, index, updateSlider = true) {
+      if (!curve || !Array.isArray(curve.points) || curve.points.length === 0) return;
+      const clampedIdx = Math.max(0, Math.min(curve.points.length - 1, Number(index) || 0));
+      currentCurveSelectedIndex = clampedIdx;
+      const point = curve.points[clampedIdx];
+      updateRouteMarkerAtDistance(curve.profileRows, point.x);
+
+      const status = document.getElementById('routeMapStatus');
+      if (status) {
+        status.textContent = `Selected about ${point.x.toFixed(3)} km from start, remaining ETA ${point.y.toFixed(2)} min.`;
+      }
+
+      const info = document.getElementById('curveSelectionInfo');
+      if (info) {
+        info.textContent = `Distance traveled: ${point.x.toFixed(3)} km | Remaining ETA: ${point.y.toFixed(2)} min`;
+      }
+
+      if (updateSlider) {
+        const slider = document.getElementById('curvePositionSlider');
+        if (slider) slider.value = String(clampedIdx);
+      }
+
+      const sliderGuide = document.getElementById('curveSliderGuide');
+      const slider = document.getElementById('curvePositionSlider');
+      if (sliderGuide && slider) {
+        const max = Math.max(1, Number(slider.max) || 1);
+        const pct = (clampedIdx / max) * 100;
+        sliderGuide.style.left = `calc(${pct}% - 1px)`;
+      }
+
+      if (etaKmChartInstance) {
+        etaKmChartInstance.update('none');
+      }
     }
 
     function renderEtaKmChart(curve, routeLabel, stepMeters) {
@@ -642,48 +766,128 @@ random_forest,29.704005606507174,41.95243304630297,-0.7625459357564113,1880</pre
         }
       };
 
-      const selectCurvePoint = (index) => {
-        const point = curve.points[index];
-        if (!point) return;
-        renderRouteMap(curve.profileRows, point.x);
-        const status = document.getElementById('routeMapStatus');
-        if (status) {
-          status.textContent = `Selected about ${point.x.toFixed(3)} km from start, remaining ETA ${point.y.toFixed(2)} min.`;
+      const selectionCursorPlugin = {
+        id: 'selectionCursorPlugin',
+        afterDatasetsDraw(chart) {
+          if (!curve.points || curve.points.length === 0) return;
+          const idx = Math.max(0, Math.min(curve.points.length - 1, currentCurveSelectedIndex));
+          const xVal = curve.points[idx]?.x;
+          const yVal = curve.points[idx]?.y;
+          if (!Number.isFinite(xVal) || !Number.isFinite(yVal)) return;
+
+          const xScale = chart.scales?.x;
+          const yScale = chart.scales?.y;
+          if (!xScale || !yScale || !chart.chartArea) return;
+
+          const xPixel = xScale.getPixelForValue(xVal);
+          const yPixel = yScale.getPixelForValue(yVal);
+          const { ctx, chartArea } = chart;
+
+          ctx.save();
+          ctx.strokeStyle = '#1f2f46';
+          ctx.lineWidth = 1.5;
+          ctx.setLineDash([4, 4]);
+          ctx.beginPath();
+          ctx.moveTo(xPixel, chartArea.top);
+          ctx.lineTo(xPixel, chartArea.bottom);
+          ctx.stroke();
+
+          ctx.setLineDash([]);
+          ctx.fillStyle = '#1f2f46';
+          ctx.beginPath();
+          ctx.arc(xPixel, yPixel, 4, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
         }
+      };
+
+      const makeBandSeries = (bandName) => {
+        const data = [];
+        for (let i = 0; i < curve.points.length; i += 1) {
+          const prevBand = i > 0 ? curve.bandPerSegment?.[i - 1] : null;
+          const nextBand = i < curve.points.length - 1 ? curve.bandPerSegment?.[i] : null;
+          const touchesBand = prevBand === bandName || nextBand === bandName;
+          data.push(touchesBand ? curve.points[i] : { x: curve.points[i].x, y: null });
+        }
+        return data;
       };
 
       etaKmChartInstance = new Chart(ctx, {
         type: 'line',
         data: {
           datasets: [{
-            label: 'Remaining ETA',
-            data: curve.points,
-            borderColor: '#1460aa',
-            backgroundColor: 'rgba(20, 96, 170, 0.08)',
+            label: 'Remaining ETA (fast)',
+            data: makeBandSeries('fast'),
+            borderColor: '#2ca94f',
+            backgroundColor: 'rgba(44, 169, 79, 0.05)',
             tension: 0,
             stepped: true,
             fill: false,
-            pointRadius: 1,
-            pointHoverRadius: 3
+            borderWidth: 4,
+            pointRadius: 0,
+            pointHoverRadius: 0,
+            pointHitRadius: 14,
+            spanGaps: false
+          }, {
+            label: 'Remaining ETA (medium)',
+            data: makeBandSeries('medium'),
+            borderColor: '#d9aa1f',
+            backgroundColor: 'rgba(217, 170, 31, 0.05)',
+            tension: 0,
+            stepped: true,
+            fill: false,
+            borderWidth: 4,
+            pointRadius: 0,
+            pointHoverRadius: 0,
+            pointHitRadius: 14,
+            spanGaps: false
+          }, {
+            label: 'Remaining ETA (slow)',
+            data: makeBandSeries('slow'),
+            borderColor: '#d73434',
+            backgroundColor: 'rgba(215, 52, 52, 0.05)',
+            tension: 0,
+            stepped: true,
+            fill: false,
+            borderWidth: 4,
+            pointRadius: 0,
+            pointHoverRadius: 0,
+            pointHitRadius: 14,
+            spanGaps: false
           }]
         },
-        plugins: [endpointLabelPlugin],
+        plugins: [endpointLabelPlugin, selectionCursorPlugin],
         options: {
           responsive: true,
           maintainAspectRatio: false,
           parsing: true,
+          interaction: {
+            mode: 'nearest',
+            intersect: false
+          },
           plugins: {
-            legend: { display: true, position: 'top' },
+            legend: { display: false },
             tooltip: {
               callbacks: {
-                label: (ctx2) => `Remaining ETA ${ctx2.parsed.y.toFixed(2)} min`,
+                label: (ctx2) => {
+                  const y = Number(ctx2.parsed.y);
+                  if (!Number.isFinite(y)) return null;
+                  return `Remaining ETA ${y.toFixed(2)} min`;
+                },
                 title: (items) => `Distance traveled ${items[0].parsed.x.toFixed(3)} km`
               }
             }
           },
-          onClick: (_, elements) => {
+          onClick: (event, elements, chart) => {
+            let idx = -1;
             if (elements && elements.length > 0) {
-              selectCurvePoint(elements[0].index);
+              idx = elements[0].index;
+            } else if (chart?.scales?.x && Number.isFinite(event?.x)) {
+              const distanceKm = chart.scales.x.getValueForPixel(event.x);
+              idx = nearestPointIndexByDistance(curve.points, distanceKm);
+            }
+            if (idx >= 0) {
+              updateCurveSelection(curve, idx, true);
             }
           },
           scales: {
@@ -708,9 +912,18 @@ random_forest,29.704005606507174,41.95243304630297,-0.7625459357564113,1880</pre
         `<b>Estimated full-route ETA:</b> ${curve.totalEtaMin.toFixed(2)} min`,
         `<b>Sampling step:</b> ${stepMeters} m`,
         `<b>Plotted points:</b> ${curve.totalSamples}`,
+        `<b>Slope colors (rolling window=5):</b> red=slow traffic, yellow=medium, green=fast`,
+        `<b>Band thresholds (min/km):</b> medium >= ${curve.thresholds.medium.toFixed(2)}, slow >= ${curve.thresholds.high.toFixed(2)}`,
         `<b>Training bin size reference:</b> 60 m`,
         `<b>Curve model:</b> congestion-adjusted local segment integration`
       ].join(' | ');
+
+      const slider = document.getElementById('curvePositionSlider');
+      if (slider) {
+        slider.max = String(Math.max(0, curve.points.length - 1));
+        slider.value = '0';
+      }
+      updateCurveSelection(curve, 0, false);
     }
 
     async function loadAndRenderCurve() {
@@ -722,8 +935,9 @@ random_forest,29.704005606507174,41.95243304630297,-0.7625459357564113,1880</pre
       if (!curve) {
         throw new Error('Route profile does not have enough valid points for curve generation.');
       }
+      currentCurve = curve;
       currentRouteRows = curve.profileRows;
-      renderRouteMap(currentRouteRows);
+      renderRouteMap(currentRouteRows, null, { fitToRoute: true });
       renderEtaKmChart(curve, routeLabel, stepMeters);
     }
 
@@ -773,6 +987,14 @@ random_forest,29.704005606507174,41.95243304630297,-0.7625459357564113,1880</pre
       `;
 
       await loadAndRenderCurve();
+
+      const slider = document.getElementById('curvePositionSlider');
+      if (slider) {
+        slider.addEventListener('input', (e) => {
+          if (!currentCurve || !Array.isArray(currentCurve.points) || currentCurve.points.length === 0) return;
+          updateCurveSelection(currentCurve, Number(e.target.value) || 0, false);
+        });
+      }
 
       document.getElementById('curveRouteSelect').addEventListener('change', () => {
         loadAndRenderCurve().catch((err) => {
