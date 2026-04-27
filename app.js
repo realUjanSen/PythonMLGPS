@@ -38,7 +38,6 @@ function createDefaultRouteVariants() {
 const state = {
   map: null,
   sessions: [],
-  csvSource: localStorage.getItem("csvSource") || "original",
   selectedId: null,
   showAll: true,
   renderLayers: new Map(),
@@ -47,7 +46,7 @@ const state = {
   deletedSessionIds: new Set(),
   routeVariants: createDefaultRouteVariants(),
   selectedVariantKey: "route2",
-  showVariants: false,
+  showVariants: true,
   waypointEditMode: false,
   midpointMode: false,
   showTraffic: true,
@@ -56,8 +55,6 @@ const state = {
   currentTrafficInfo: null,
   isErasing: false,
   eraserPreview: null,
-  inspectorMarker: null,
-  pointInspectorMode: false,
   eraserLastEraseTime: 0,
   eraserThrottleMs: 350,
   renderDebounceTimer: null,
@@ -68,9 +65,9 @@ function $(id) {
   return document.getElementById(id);
 }
 
-async function getCsvFileList(source = "original") {
+async function getCsvFileList() {
   try {
-    const response = await fetch(`/api/list-csv-files?source=${encodeURIComponent(source)}`);
+    const response = await fetch("/api/list-csv-files");
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
     }
@@ -78,30 +75,6 @@ async function getCsvFileList(source = "original") {
   } catch (error) {
     console.warn("Failed to fetch CSV file list:", error);
     return [];
-  }
-}
-
-async function refreshNodeStatus() {
-  const badge = $("nodeStatus");
-  if (!badge) return;
-
-  badge.textContent = "Node: Checking...";
-  badge.classList.remove("online", "offline");
-  badge.classList.add("checking");
-
-  try {
-    const response = await fetch("/api/list-csv-files?source=original", { cache: "no-store" });
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
-    }
-
-    badge.textContent = "Node: Online";
-    badge.classList.remove("checking", "offline");
-    badge.classList.add("online");
-  } catch (error) {
-    badge.textContent = "Node: Offline";
-    badge.classList.remove("checking", "online");
-    badge.classList.add("offline");
   }
 }
 
@@ -163,7 +136,7 @@ function rebuildPointRows(session) {
   session.pointRows = session.rows.filter((row) => row.hasCoords);
 }
 
-function parseCsv(text, fileName, source = "original") {
+function parseCsv(text, fileName) {
   const rows = text
     .replace(/\r/g, "")
     .split("\n")
@@ -212,7 +185,6 @@ function parseCsv(text, fileName, source = "original") {
   const session = {
     id: fileName,
     fileName,
-    source,
     headers,
     rows: parsedRows,
     pointRows,
@@ -337,20 +309,12 @@ function saveRouteVariantsToStorage() {
 
 function loadRouteVariantsFromStorage() {
   const defaults = createDefaultRouteVariants();
-  const stored = JSON.parse(localStorage.getItem("routeVariantsV1") || "null");
-
-  if (!stored || typeof stored !== "object") {
-    state.routeVariants = defaults;
-    return;
-  }
-
-  ROUTE_VARIANT_KEYS.forEach((key) => {
-    const points = Array.isArray(stored[key]) ? stored[key] : [];
-    defaults[key].points = points
-      .filter((p) => Array.isArray(p) && p.length >= 2 && Number.isFinite(Number(p[0])) && Number.isFinite(Number(p[1])))
-      .map((p) => [Number(p[0]), Number(p[1])]);
-  });
-
+  
+  // Clear old Cityflo route variant data on load
+  localStorage.removeItem("routeVariantsV0");
+  localStorage.removeItem("routeVariantsV1");
+  
+  // Start fresh - no pre-loaded variants
   state.routeVariants = defaults;
 }
 
@@ -368,15 +332,11 @@ function renderSessionList() {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "session-item" + (state.selectedId === session.id ? " active" : "");
-    const sourceTag = session.source === "snapped" ? "snapped" : "original";
-    button.innerHTML = `${session.fileName}<span class="session-sub">source: ${sourceTag} | rows: ${session.rows.length}, points: ${session.pointRows.length}</span>`;
+    button.innerHTML = `${session.fileName}<span class="session-sub">rows: ${session.rows.length}, points: ${session.pointRows.length}</span>`;
     button.addEventListener("click", () => {
-      // Clicking the same session toggles selection off so Show All can be used without a focused session.
-      state.selectedId = state.selectedId === session.id ? null : session.id;
+      state.selectedId = session.id;
       state.shouldAutoFit = true;
-      if (state.selectedId) {
-        loadCleanedSessionIfAvailable();
-      }
+      loadCleanedSessionIfAvailable();
       renderSessionList();
       renderMeta();
       forceRenderMap();
@@ -933,93 +893,18 @@ function deleteRowsByCsvIndices(session, csvRowIndicesToDelete) {
 }
 
 function getEraseTargetSessions() {
+  const selected = getSelectedSession();
+  if (!selected) return [];
+
   const eraseAllVisible = Boolean($("eraseAllVisible")?.checked);
-  const visibleSessions = state.showAll
-    ? state.sessions
-    : state.sessions.filter((session) => session.id === state.selectedId);
-
-  if (eraseAllVisible && state.showAll) {
-    return visibleSessions.filter((session) => getSegments(session).length > 0);
+  if (!eraseAllVisible || !state.showAll) {
+    return [selected];
   }
 
-  const selected = getSelectedSession();
-  if (!selected) {
-    return [];
-  }
-
-  return [selected];
-}
-
-function clearInspectorMarker() {
-  if (state.inspectorMarker && state.map) {
-    try {
-      state.map.removeLayer(state.inspectorMarker);
-    } catch (e) {}
-    state.inspectorMarker = null;
-  }
-}
-
-function inspectNearestPoint(latlng) {
-  if (!state.map) return;
-
-  const infoBox = $("pointInspectorInfo");
-  const selected = getSelectedSession();
-  const searchAcrossAll = Boolean($("eraseAllVisible")?.checked) && state.showAll;
-  const visibleSessions = state.showAll
-    ? state.sessions
-    : state.sessions.filter((session) => session.id === state.selectedId);
-  let candidates = [];
-  if (selected && !searchAcrossAll) {
-    candidates = [selected];
-  } else {
-    candidates = visibleSessions.length > 0 ? visibleSessions : state.sessions;
-  }
-
-  let best = null;
-  for (const session of candidates) {
-    for (const row of session.pointRows) {
-      const d = state.map.distance(latlng, [row.lat, row.lng]);
-      if (!best || d < best.distanceM) {
-        best = { session, row, distanceM: d };
-      }
-    }
-  }
-
-  if (!best) {
-    if (infoBox) infoBox.textContent = "No point rows available for inspection.";
-    clearInspectorMarker();
-    return;
-  }
-
-  clearInspectorMarker();
-  state.inspectorMarker = L.circleMarker([best.row.lat, best.row.lng], {
-    radius: 6,
-    color: "#1f2933",
-    weight: 2,
-    fillColor: "#ffb020",
-    fillOpacity: 1
-  }).addTo(state.map);
-
-  const sourceTag = best.session.source === "snapped" ? "snapped" : "original";
-  state.inspectorMarker.bindPopup(
-    `Nearest point<br>${best.session.fileName}<br>source=${sourceTag}<br>distance=${best.distanceM.toFixed(1)}m`
-  ).openPopup();
-
-  if (infoBox) {
-    infoBox.innerHTML = [
-      `<b>Session:</b> ${best.session.fileName}`,
-      `<b>Source:</b> ${sourceTag}`,
-      `<b>Row index:</b> ${best.row.index}`,
-      `<b>Lat/Lng:</b> ${best.row.lat.toFixed(6)}, ${best.row.lng.toFixed(6)}`,
-      `<b>Timestamp:</b> ${best.row.timestamp || "N/A"}`,
-      `<b>Distance from click:</b> ${best.distanceM.toFixed(1)} m`
-    ].join("<br>");
-  }
-
-  const scopeLabel = selected && !searchAcrossAll
-    ? "selected session"
-    : (state.showAll ? "all visible sessions" : "available sessions");
-  setStatus(`Point investigator (${scopeLabel}): ${best.session.fileName} row ${best.row.index} (${best.distanceM.toFixed(1)}m from click).`);
+  return state.sessions.filter((session) => {
+    const segments = getSegments(session);
+    return segments.length > 0;
+  });
 }
 
 function eraseAroundSession(session, latlng, radiusMeters, minChunk) {
@@ -1081,11 +966,7 @@ function removeEraserPreview() {
 function eraseAround(latlng, options = {}) {
   const targets = getEraseTargetSessions();
   if (targets.length === 0) {
-    if (Boolean($("eraseAllVisible")?.checked) && state.showAll) {
-      setStatus("No visible sessions available to erase.", true);
-    } else {
-      setStatus("Select a session before erasing.", true);
-    }
+    setStatus("Select a session before erasing.", true);
     return;
   }
 
@@ -1122,7 +1003,6 @@ function updateModeIndicators() {
   const eraserOn = Boolean($("eraserMode")?.checked);
   const editOn = Boolean($("waypointEditMode")?.checked);
   const midpointOn = Boolean($("midpointMode")?.checked);
-  const inspectorOn = Boolean($("pointInspectorMode")?.checked);
 
   const wrap = document.querySelector(".map-wrap");
   const eraserBadge = $("eraserBadge");
@@ -1140,7 +1020,6 @@ function updateModeIndicators() {
   let text = "Normal mode";
   if (editOn && midpointOn) text = "Waypoint edit + midpoint insert";
   else if (editOn) text = "Waypoint edit mode";
-  else if (inspectorOn) text = "Point investigator mode";
   else if (eraserOn) text = "Eraser mode";
 
   if (editOn && eraserOn) {
@@ -1165,8 +1044,7 @@ async function deleteSelectedSession() {
   if (!ok) return;
 
   try {
-    const sourceQuery = session.source ? `&source=${encodeURIComponent(session.source)}` : "";
-    const response = await fetch(`/api/delete-csv?file=${encodeURIComponent(session.fileName)}${sourceQuery}`);
+    const response = await fetch(`/api/delete-csv?file=${encodeURIComponent(session.fileName)}`);
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
     }
@@ -1177,11 +1055,11 @@ async function deleteSelectedSession() {
     state.sessions = state.sessions.filter((s) => s.id !== session.id);
     state.undoStack = [];
 
-    if (state.sessions.length === 0) {
-      state.selectedId = null;
-    } else if (state.selectedId === session.id) {
-      state.selectedId = null;
+    if (state.sessions.length > 0) {
+      state.selectedId = state.sessions[0].id;
       state.shouldAutoFit = true;
+    } else {
+      state.selectedId = null;
     }
 
     renderSessionList();
@@ -1234,59 +1112,18 @@ function getCleanedSessionsKey() {
   return "cleanedSessions_v1";
 }
 
-function isQuotaExceededError(err) {
-  if (!err) return false;
-  return err.name === "QuotaExceededError" || err.code === 22 || /quota/i.test(String(err.message || ""));
-}
-
-function persistCleanedSessionsWithPrune(cleanedSessions) {
-  const key = getCleanedSessionsKey();
-  let working = { ...cleanedSessions };
-
-  while (true) {
-    try {
-      localStorage.setItem(key, JSON.stringify(working));
-      return { ok: true, pruned: cleanedSessions && Object.keys(cleanedSessions).length - Object.keys(working).length };
-    } catch (err) {
-      if (!isQuotaExceededError(err)) {
-        return { ok: false, error: err, pruned: 0 };
-      }
-
-      const entries = Object.entries(working);
-      if (entries.length <= 1) {
-        return { ok: false, error: err, pruned: 0, quota: true };
-      }
-
-      entries.sort((a, b) => (Number(a[1]?.timestamp) || 0) - (Number(b[1]?.timestamp) || 0));
-      const [oldestKey] = entries[0];
-      delete working[oldestKey];
-    }
-  }
-}
-
-function setRouteLabVisibility(visible) {
-  const panel = $("routeLabPanel");
-  if (!panel) return;
-  panel.classList.toggle("is-hidden", !visible);
-}
-
 function saveCleanedSession() {
+  const session = getSelectedSession();
+  if (!session) {
+    setStatus("Select a session before saving.", true);
+    return;
+  }
+
   try {
     const cleanedSessions = JSON.parse(localStorage.getItem(getCleanedSessionsKey()) || "{}");
 
     const saveAllVisible = Boolean($("eraseAllVisible")?.checked) && state.showAll;
-    const selected = getSelectedSession();
-    const targets = saveAllVisible
-      ? state.sessions.filter((session) => getSegments(session).length > 0)
-      : (selected ? [selected] : []);
-
-    if (targets.length === 0) {
-      setStatus(saveAllVisible
-        ? "No visible sessions available to save."
-        : "Select a session before saving.", true);
-      return;
-    }
-
+    const targets = saveAllVisible ? state.sessions : [session];
     targets.forEach((target) => {
       cleanedSessions[target.fileName] = {
         headers: target.headers,
@@ -1295,20 +1132,11 @@ function saveCleanedSession() {
       };
     });
 
-    const saveResult = persistCleanedSessionsWithPrune(cleanedSessions);
-    if (!saveResult.ok) {
-      if (saveResult.quota) {
-        setStatus("Error saving: browser storage is full for cleanedSessions_v1. Use Download cleaned CSV, or save fewer sessions at once.", true);
-        return;
-      }
-      throw saveResult.error;
-    }
-
-    const pruneMsg = saveResult.pruned > 0 ? ` (pruned ${saveResult.pruned} older saved session(s) due to storage limit)` : "";
+    localStorage.setItem(getCleanedSessionsKey(), JSON.stringify(cleanedSessions));
     if (targets.length > 1) {
-      setStatus(`Saved cleaned CSV data for ${targets.length} visible sessions. Data persists across refreshes${pruneMsg}.`);
+      setStatus(`Saved cleaned CSV data for ${targets.length} visible sessions. Data persists across refreshes.`);
     } else {
-      setStatus(`Cleaned CSV saved for ${targets[0].fileName}. Data persists across page refreshes${pruneMsg}.`);
+      setStatus(`Cleaned CSV saved for ${session.fileName}. Data persists across page refreshes.`);
     }
   } catch (err) {
     setStatus(`Error saving: ${err.message}`, true);
@@ -1643,36 +1471,20 @@ async function loadSessions() {
   state.sessions = [];
   state.undoStack = [];
   state.shouldAutoFit = true;
-  clearInspectorMarker();
 
-  const CSV_FILES = await getCsvFileList(state.csvSource);
+  const CSV_FILES = await getCsvFileList();
   const skipped = [];
 
-  for (const fileEntry of CSV_FILES) {
-    const fileName = typeof fileEntry === "string"
-      ? fileEntry
-      : (fileEntry?.fileName || fileEntry?.urlPath || String(fileEntry || ""));
-    const source = typeof fileEntry === "object" && fileEntry !== null && fileEntry.source
-      ? String(fileEntry.source)
-      : state.csvSource;
-    const sourceFolder = source === "snapped" ? "csv_snapped" : "csv";
-    const fileUrl = typeof fileEntry === "object" && fileEntry !== null && fileEntry.urlPath
-      ? fileEntry.urlPath
-      : `${sourceFolder}/${fileName}`;
-
-    if (!fileName) {
-      continue;
-    }
-
+  for (const fileName of CSV_FILES) {
     try {
-      const response = await fetch(fileUrl);
+      const response = await fetch(`csv/${fileName}`);
       if (!response.ok) {
         skipped.push(fileName);
         continue;
       }
 
       const text = await response.text();
-      const session = parseCsv(text, fileName, source);
+      const session = parseCsv(text, fileName);
       if (!state.deletedSessionIds.has(session.id)) {
         state.sessions.push(session);
       }
@@ -1689,8 +1501,8 @@ async function loadSessions() {
     return;
   }
 
-  if (state.selectedId && !state.sessions.some((s) => s.id === state.selectedId)) {
-    state.selectedId = null;
+  if (!state.selectedId || !state.sessions.some((s) => s.id === state.selectedId)) {
+    state.selectedId = state.sessions[0].id;
   }
 
   loadAllCleanedSessionsIfAvailable();
@@ -1701,8 +1513,7 @@ async function loadSessions() {
   renderMap();
 
   const skippedMsg = skipped.length ? ` Skipped ${skipped.length} missing/unreadable file(s).` : "";
-  const sourceLabel = state.csvSource === "snapped" ? "snapped" : "original";
-  setStatus(`Loaded ${state.sessions.length} ${sourceLabel} session file(s).${skippedMsg}`);
+  setStatus(`Loaded ${state.sessions.length} session file(s).${skippedMsg}`);
 }
 
 async function loadFromPickedFiles(fileList) {
@@ -1734,7 +1545,7 @@ async function loadFromPickedFiles(fileList) {
   }
 
   state.sessions.sort((a, b) => a.fileName.localeCompare(b.fileName));
-  state.selectedId = null;
+  state.selectedId = state.sessions[0].id;
 
   loadAllCleanedSessionsIfAvailable();
 
@@ -1757,11 +1568,6 @@ function initMap() {
   }).addTo(state.map);
 
   state.map.on("click", (event) => {
-    if (state.pointInspectorMode) {
-      inspectNearestPoint(event.latlng);
-      return;
-    }
-
     if (state.waypointEditMode) return;
     if (!$("eraserMode")?.checked) return;
     if (event.originalEvent?.ctrlKey) return; // Ctrl+click: pan, not erase
@@ -1828,11 +1634,6 @@ function initMap() {
 
 function wireEvents() {
   $("reloadBtn")?.addEventListener("click", loadSessions);
-  $("csvSourceSelect")?.addEventListener("change", (e) => {
-    state.csvSource = e.target.value === "snapped" ? "snapped" : "original";
-    localStorage.setItem("csvSource", state.csvSource);
-    loadSessions();
-  });
   $("undoBtn")?.addEventListener("click", undoErase);
   $("resetBtn")?.addEventListener("click", resetSelectedSession);
   $("saveCleanedBtn")?.addEventListener("click", saveCleanedSession);
@@ -1847,15 +1648,6 @@ function wireEvents() {
 
   $("eraserRadius")?.addEventListener("input", handleRadiusChange);
   $("eraserMode")?.addEventListener("change", updateModeIndicators);
-  $("pointInspectorMode")?.addEventListener("change", (e) => {
-    state.pointInspectorMode = Boolean(e.target.checked);
-    if (!state.pointInspectorMode) {
-      clearInspectorMarker();
-      const infoBox = $("pointInspectorInfo");
-      if (infoBox) infoBox.textContent = "Point inspector idle. Click on the map to inspect nearest point.";
-    }
-    updateModeIndicators();
-  });
 
   $("classSelect")?.addEventListener("change", (e) => {
     const session = getSelectedSession();
@@ -1890,10 +1682,6 @@ function wireEvents() {
     state.showVariants = e.target.checked;
     state.shouldAutoFit = false;
     renderMap();
-  });
-
-  $("showRouteLabToggle")?.addEventListener("change", (e) => {
-    setRouteLabVisibility(Boolean(e.target.checked));
   });
 
   $("waypointEditMode")?.addEventListener("change", (e) => {
@@ -1960,12 +1748,6 @@ async function bootstrap() {
     showVariantsToggle.checked = state.showVariants;
   }
 
-  const showRouteLabToggle = $("showRouteLabToggle");
-  if (showRouteLabToggle) {
-    showRouteLabToggle.checked = false;
-  }
-  setRouteLabVisibility(false);
-
   const showTrafficToggle = $("showTrafficToggle");
   if (showTrafficToggle) {
     showTrafficToggle.checked = state.showTraffic;
@@ -1982,17 +1764,10 @@ async function bootstrap() {
     $("thresholdValue").textContent = `${Math.round(state.trafficThreshold)}%`;
   }
 
-  const sourceSelect = $("csvSourceSelect");
-  if (sourceSelect) {
-    sourceSelect.value = state.csvSource === "snapped" ? "snapped" : "original";
-  }
-
   initMap();
   wireEvents();
   updateModeIndicators();
   renderRouteStats();
-  refreshNodeStatus();
-  setInterval(refreshNodeStatus, 15000);
   loadSessions();
 }
 
