@@ -10,7 +10,7 @@
 <body>
   <header class="topbar">
     <h1>GPS Session Cleaner</h1>
-    <div id="nodeStatus" class="node-status checking">Node: Checking...</div>
+    <div class="hint">phpMyAdmin style route inspector</div>
   </header>
 
   <main class="layout">
@@ -19,11 +19,6 @@
         <h2>Session List</h2>
         <div class="toolbar">
           <button id="reloadBtn" type="button">Reload CSV</button>
-          <label for="csvSourceSelect">Source</label>
-          <select id="csvSourceSelect">
-            <option value="original" selected>Original (csv)</option>
-            <option value="snapped">Snapped (csv_snapped)</option>
-          </select>
           <input id="filePicker" type="file" accept=".csv" multiple>
           <label><input id="showAllToggle" type="checkbox" checked> Show all routes</label>
           <button id="deleteSessionBtn" type="button">Delete selected session</button>
@@ -71,10 +66,6 @@
         <div class="field-row">
           <label><input id="eraseAllVisible" type="checkbox" checked> Erase across all visible sessions</label>
         </div>
-        <div class="field-row">
-          <label><input id="pointInspectorMode" type="checkbox"> Point investigator mode</label>
-        </div>
-        <div id="pointInspectorInfo" class="meta">Point inspector idle. Click on the map to inspect nearest point.</div>
         <div class="toolbar">
           <button id="undoBtn" type="button">Undo</button>
           <button id="resetBtn" type="button">Reset session</button>
@@ -85,13 +76,6 @@
       </section>
 
       <section class="panel">
-        <h2>Advanced Panels</h2>
-        <div class="field-row">
-          <label><input id="showRouteLabToggle" type="checkbox"> Show Route Lab</label>
-        </div>
-      </section>
-
-      <section id="routeLabPanel" class="panel is-hidden">
         <h2>Route Lab</h2>
         <div class="field-row">
           <label for="routeVariantSelect">Route Variant</label>

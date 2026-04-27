@@ -1,0 +1,11 @@
+exportedAt: 2026-04-27T06:30:04.913Z
+sessions in payload: 11
+restorable sessions (cache fewer rows than raw): 8
+- session_012_20260409_164237_Office_to_Home.csv: raw=1908, cache=1886, deleted=22
+- session_014_20260410_164636_Office_to_Home.csv: raw=2767, cache=2199, deleted=568
+- session_016_20260413_153349_Office_to_Home.csv: raw=1031, cache=977, deleted=54
+- session_025_20260416_180301_Office_to_Home.csv: raw=156, cache=149, deleted=7
+- session_030_20260417_165150_Office_to_Home.csv: raw=1498, cache=1462, deleted=36
+- session_035_20260420_165549_Office_to_Home.csv: raw=1234, cache=894, deleted=340
+- session_041_20260423_080739_Home_to_Office.csv: raw=816, cache=814, deleted=2
+- session_043_20260424_081539_Home_to_Office.csv: raw=646, cache=636, deleted=10
