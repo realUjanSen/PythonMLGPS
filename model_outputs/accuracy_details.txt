@@ -1,0 +1,9 @@
+Note: This is a regression problem (predicting minutes). A confusion matrix is not applicable.
+Use MAE, RMSE and R^2 as quality metrics.
+
+Model metrics:
+- xgboost: MAE=19.610 min, RMSE=24.291 min, R2=-0.522
+- hist_gradient_boosting: MAE=22.821 min, RMSE=28.331 min, R2=-1.070
+- random_forest: MAE=26.175 min, RMSE=31.869 min, R2=-1.619
+
+Residuals (best model = xgboost): mean=4.093, std=23.943, median=7.749

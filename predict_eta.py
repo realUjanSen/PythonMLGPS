@@ -22,6 +22,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--vehicle-class", default=None, choices=["Shuttle", "Public Bus"], help="Vehicle class.")
     parser.add_argument("--weekday", type=int, default=None, help="Weekday 0=Mon..6=Sun (defaults to today).")
     parser.add_argument("--offroute-m", type=float, default=0.0, help="Current off-route distance in meters.")
+    parser.add_argument("--session-id", type=int, default=None, help="Optional session ID for session-aware blending.")
     parser.add_argument("--profiles-dir", default="model_outputs", help="Directory containing route_profile_*.csv and choke_points.csv.")
     parser.add_argument("--top-chokes", type=int, default=5, help="How many choke points ahead to print.")
     return parser.parse_args()
@@ -178,6 +179,24 @@ def main() -> None:
     eta_min = (1.0 - blend_local_weight) * model_eta_for_trip + blend_local_weight * local_eta_for_trip
     eta_min = max(0.0, eta_min)
 
+    # Session-aware blending: if session_id is provided, blend with per-session baseline.
+    session_aware_blend_weight = 0.0
+    session_baseline_eta = None
+    if args.session_id is not None:
+        sess_stats_path = profiles_dir / "session_statistics.csv"
+        if sess_stats_path.exists():
+            try:
+                sess_stats_df = pd.read_csv(sess_stats_path)
+                session_row = sess_stats_df[(sess_stats_df["session_id"] == args.session_id) & (sess_stats_df["route_type"] == args.route)]
+                if not session_row.empty and np.isfinite(session_row.iloc[0]["mean_eta_min"]):
+                    session_baseline_eta = float(session_row.iloc[0]["mean_eta_min"])
+                    # Blend: 30% session baseline, 70% model/local blend
+                    session_aware_blend_weight = 0.30
+                    eta_min = (1.0 - session_aware_blend_weight) * eta_min + session_aware_blend_weight * session_baseline_eta
+                    eta_min = max(0.0, eta_min)
+            except Exception:
+                pass
+
     start_dt = datetime.combine(datetime.today().date(), datetime.strptime(args.start_time, "%H:%M").time())
     eta_dt = start_dt + timedelta(minutes=eta_min)
 
@@ -191,6 +210,8 @@ def main() -> None:
         "estimated_eta_min_to_route_end": round(eta_min_full_route, 2),
         "estimated_eta_local_min": round(local_eta_for_trip, 2),
         "eta_blend_local_weight": round(float(blend_local_weight), 3),
+        "session_aware_blend_weight": round(float(session_aware_blend_weight), 3),
+        "session_baseline_eta_min": round(float(session_baseline_eta), 2) if session_baseline_eta is not None else None,
         "estimated_arrival_time": eta_dt.strftime("%H:%M:%S"),
         "model": bundle.get("best_model_name", "unknown"),
         "support_at_position": int(row["session_support"]),

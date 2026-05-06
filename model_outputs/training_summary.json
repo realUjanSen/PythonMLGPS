@@ -1,51 +1,60 @@
 {
-  "sessions_used": 23,
-  "morning_sessions": 13,
-  "evening_sessions": 10,
+  "sessions_used": 34,
+  "morning_sessions": 18,
+  "evening_sessions": 16,
   "morning_reference": "session_043_20260424_081539_Home_to_Office.csv",
   "evening_reference": "session_035_20260420_165549_Office_to_Home.csv",
   "best_model": "xgboost",
   "metrics": [
     {
       "model": "xgboost",
-      "mae_min": 24.10623361682987,
-      "rmse_min": 29.95886703905308,
-      "r2": -0.12013375729677578
+      "mae_min": 19.60951460032724,
+      "rmse_min": 24.290738639236288,
+      "r2": -0.5215938678256329,
+      "weighted_mae_min": 21.87154286106834,
+      "weighted_rmse_min": 26.884382885649355,
+      "weighted_r2": -0.7478330267100735
     },
     {
       "model": "hist_gradient_boosting",
-      "mae_min": 26.180981117879107,
-      "rmse_min": 32.958727642669594,
-      "r2": -0.3556887428269826
+      "mae_min": 22.821002474170793,
+      "rmse_min": 28.330656333581047,
+      "r2": -1.06981046702585,
+      "weighted_mae_min": 25.660067485492693,
+      "weighted_rmse_min": 31.111051985228535,
+      "weighted_r2": -1.3406107243227718
     },
     {
       "model": "random_forest",
-      "mae_min": 28.26760514096915,
-      "rmse_min": 38.33001353797974,
-      "r2": -0.8335681647178859
+      "mae_min": 26.175071215185238,
+      "rmse_min": 31.86857516858599,
+      "r2": -1.619042829786542,
+      "weighted_mae_min": 27.406597653595387,
+      "weighted_rmse_min": 32.90697745432191,
+      "weighted_r2": -1.618639923533605
     }
   ],
   "baseline_test_metrics": [
     {
       "model": "xgboost",
-      "mae_min": 24.253740882830563,
-      "rmse_min": 32.11896649041569,
-      "r2": -0.03311641766580431,
-      "rows": 1880
+      "mae_min": 11.730569233926607,
+      "rmse_min": 17.23257913434467,
+      "r2": 0.28671152044747605,
+      "rows": 1530
     },
     {
       "model": "hist_gradient_boosting",
-      "mae_min": 26.87261248457345,
-      "rmse_min": 36.0992546742861,
-      "r2": -0.3050363519285002,
-      "rows": 1880
+      "mae_min": 14.462496249630965,
+      "rmse_min": 22.906870682818255,
+      "r2": -0.26036453695539463,
+      "rows": 1530
     },
     {
       "model": "random_forest",
-      "mae_min": 33.60308548187597,
-      "rmse_min": 48.59075397063899,
-      "r2": -1.364467856684052,
-      "rows": 1880
+      "mae_min": 21.640916928896715,
+      "rmse_min": 32.12999616145664,
+      "r2": -1.4796249297265724,
+      "rows": 1530
     }
   ],
   "outputs": {
@@ -54,13 +63,16 @@
     "baseline_metrics_csv": "model_outputs/baseline_test_metrics.csv",
     "training_table_csv": "model_outputs/training_table.csv",
     "completed_sessions_csv": "model_outputs/sessions_completed_with_imputation.csv",
+    "session_statistics_csv": "model_outputs/session_statistics.csv",
     "choke_points_csv": "model_outputs/choke_points.csv",
     "profile_morning_csv": "model_outputs/route_profile_morning.csv",
     "profile_evening_csv": "model_outputs/route_profile_evening.csv",
     "training_plots": [
       "model_outputs/training_metrics.png",
       "model_outputs/pred_vs_actual.png",
-      "model_outputs/xgboost_learning_curve.png"
+      "model_outputs/xgboost_learning_curve.png",
+      "model_outputs/residuals_hist.png",
+      "model_outputs/accuracy_details.txt"
     ],
     "snapped_csv_dir": "csv_snapped"
   }

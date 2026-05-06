@@ -46,7 +46,8 @@ const state = {
   deletedSessionIds: new Set(),
   routeVariants: createDefaultRouteVariants(),
   selectedVariantKey: "route2",
-  showVariants: true,
+  // Variants deprecated — don't render variant polylines by default
+  showVariants: false,
   waypointEditMode: false,
   midpointMode: false,
   showTraffic: true,
@@ -219,14 +220,12 @@ function saveClass(fileName, value) {
 }
 
 function getSavedMorningVariant(fileName) {
-  const map = JSON.parse(localStorage.getItem("sessionMorningVariants") || "{}");
-  return map[fileName] || "";
+  // Persistent morning-variant storage removed — always return empty variant
+  return "";
 }
 
 function saveMorningVariant(fileName, value) {
-  const map = JSON.parse(localStorage.getItem("sessionMorningVariants") || "{}");
-  map[fileName] = value;
-  localStorage.setItem("sessionMorningVariants", JSON.stringify(map));
+  // No-op: disabling persistent morning variant saves
 }
 
 function getMorningVariantLabel(value) {
@@ -300,22 +299,12 @@ function getSelectedSession() {
 }
 
 function saveRouteVariantsToStorage() {
-  const toStore = {};
-  ROUTE_VARIANT_KEYS.forEach((key) => {
-    toStore[key] = state.routeVariants[key].points;
-  });
-  localStorage.setItem("routeVariantsV1", JSON.stringify(toStore));
+  // No-op: persistent route variant storage removed
 }
 
 function loadRouteVariantsFromStorage() {
-  const defaults = createDefaultRouteVariants();
-  
-  // Clear old Cityflo route variant data on load
-  localStorage.removeItem("routeVariantsV0");
-  localStorage.removeItem("routeVariantsV1");
-  
-  // Start fresh - no pre-loaded variants
-  state.routeVariants = defaults;
+  // Initialize in-memory defaults for route variants (no persistent storage)
+  state.routeVariants = createDefaultRouteVariants();
 }
 
 function getSegments(session) {
@@ -351,12 +340,12 @@ function renderMeta() {
   const morningVariantSelect = $("morningVariantSelect");
   const session = getSelectedSession();
 
-  if (!meta || !classSelect || !morningVariantSelect) return;
+  if (!meta || !classSelect) return;
 
   if (!session) {
     meta.textContent = "No session selected.";
     classSelect.value = "";
-    morningVariantSelect.value = "";
+    if (morningVariantSelect) morningVariantSelect.value = "";
     return;
   }
 
@@ -377,7 +366,7 @@ function renderMeta() {
   ].join("");
 
   classSelect.value = session.classLabel || "";
-  morningVariantSelect.value = session.morningVariant || "";
+  if (morningVariantSelect) morningVariantSelect.value = session.morningVariant || "";
 }
 
 function clearMapLayers() {
@@ -1078,7 +1067,7 @@ function undoErase() {
   }
 
   restoreRemovedState(snapshot);
-  state.shouldAutoFit = true;
+  state.shouldAutoFit = false;
   renderMeta();
   forceRenderMap();
   setStatus("Undo complete.");
@@ -1112,7 +1101,16 @@ function getCleanedSessionsKey() {
   return "cleanedSessions_v1";
 }
 
-function saveCleanedSession() {
+function buildCsvText(session) {
+  const lines = [];
+  lines.push(session.headers.map(escapeCsv).join(","));
+  session.rows.forEach((row) => {
+    lines.push(row.cells.map(escapeCsv).join(","));
+  });
+  return lines.join("\n");
+}
+
+async function saveCleanedSession() {
   const session = getSelectedSession();
   if (!session) {
     setStatus("Select a session before saving.", true);
@@ -1120,23 +1118,28 @@ function saveCleanedSession() {
   }
 
   try {
-    const cleanedSessions = JSON.parse(localStorage.getItem(getCleanedSessionsKey()) || "{}");
-
     const saveAllVisible = Boolean($("eraseAllVisible")?.checked) && state.showAll;
     const targets = saveAllVisible ? state.sessions : [session];
-    targets.forEach((target) => {
-      cleanedSessions[target.fileName] = {
-        headers: target.headers,
-        rows: target.rows,
-        timestamp: Date.now()
-      };
+    const files = targets.map((target) => ({
+      fileName: target.fileName,
+      csvText: buildCsvText(target)
+    }));
+
+    const response = await fetch("/api/save-csv", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ files })
     });
 
-    localStorage.setItem(getCleanedSessionsKey(), JSON.stringify(cleanedSessions));
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(payload.error || `HTTP ${response.status}`);
+    }
+
     if (targets.length > 1) {
-      setStatus(`Saved cleaned CSV data for ${targets.length} visible sessions. Data persists across refreshes.`);
+      setStatus(`Saved cleaned CSV data for ${targets.length} visible sessions directly to disk.`);
     } else {
-      setStatus(`Cleaned CSV saved for ${session.fileName}. Data persists across page refreshes.`);
+      setStatus(`Cleaned CSV saved for ${session.fileName} directly to disk.`);
     }
   } catch (err) {
     setStatus(`Error saving: ${err.message}`, true);
@@ -1144,31 +1147,15 @@ function saveCleanedSession() {
 }
 
 function loadCleanedSessionIfAvailable() {
-  const session = getSelectedSession();
-  return loadCleanedDataIntoSession(session);
+  return false;
 }
 
 function loadCleanedDataIntoSession(session) {
-  if (!session) return false;
-  try {
-    const cleanedSessions = JSON.parse(localStorage.getItem(getCleanedSessionsKey()) || "{}");
-    if (!cleanedSessions[session.fileName]) return false;
-    const cleaned = cleanedSessions[session.fileName];
-    session.headers = cleaned.headers;
-    session.rows = cleaned.rows;
-    rebuildRowIndex(session);
-    rebuildPointRows(session);
-    return true;
-  } catch (err) {
-    console.error("Error loading cleaned session:", err);
-    return false;
-  }
+  return Boolean(session);
 }
 
 function loadAllCleanedSessionsIfAvailable() {
-  state.sessions.forEach((session) => {
-    loadCleanedDataIntoSession(session);
-  });
+  return false;
 }
 
 function downloadCleanedCsv() {
@@ -1178,13 +1165,7 @@ function downloadCleanedCsv() {
     return;
   }
 
-  const lines = [];
-  lines.push(session.headers.map(escapeCsv).join(","));
-  session.rows.forEach((row) => {
-    lines.push(row.cells.map(escapeCsv).join(","));
-  });
-
-  const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
+  const blob = new Blob([buildCsvText(session)], { type: "text/csv;charset=utf-8;" });
   const link = document.createElement("a");
   const safeName = session.fileName.replace(/\.csv$/i, "") + "_cleaned.csv";
   link.href = URL.createObjectURL(blob);
@@ -1475,9 +1456,21 @@ async function loadSessions() {
   const CSV_FILES = await getCsvFileList();
   const skipped = [];
 
-  for (const fileName of CSV_FILES) {
+  for (const entry of CSV_FILES) {
+    const fileName = typeof entry === "string"
+      ? entry
+      : (entry && typeof entry.fileName === "string" ? entry.fileName : "");
+    const urlPath = typeof entry === "string"
+      ? `csv/${entry}`
+      : (entry && typeof entry.urlPath === "string" ? entry.urlPath : `csv/${fileName}`);
+
+    if (!fileName) {
+      skipped.push(String(entry));
+      continue;
+    }
+
     try {
-      const response = await fetch(`csv/${fileName}`);
+      const response = await fetch(urlPath);
       if (!response.ok) {
         skipped.push(fileName);
         continue;
@@ -1635,6 +1628,7 @@ function initMap() {
 function wireEvents() {
   $("reloadBtn")?.addEventListener("click", loadSessions);
   $("undoBtn")?.addEventListener("click", undoErase);
+  $("undoTopBtn")?.addEventListener("click", undoErase);
   $("resetBtn")?.addEventListener("click", resetSelectedSession);
   $("saveCleanedBtn")?.addEventListener("click", saveCleanedSession);
   $("downloadBtn")?.addEventListener("click", downloadCleanedCsv);
@@ -1733,6 +1727,25 @@ function wireEvents() {
   $("cloneBaselineBtn")?.addEventListener("click", cloneBaselineToOthers);
   $("resetVariantBtn")?.addEventListener("click", resetSelectedVariant);
   $("snapToVariantBtn")?.addEventListener("click", snapSelectedSessionToVariant);
+
+  document.addEventListener("keydown", (event) => {
+    const target = event.target;
+    const isTypingTarget = Boolean(
+      target && (
+        target.tagName === "INPUT" ||
+        target.tagName === "TEXTAREA" ||
+        target.tagName === "SELECT" ||
+        target.isContentEditable
+      )
+    );
+
+    if (isTypingTarget) return;
+    if (!(event.ctrlKey || event.metaKey) || event.shiftKey || event.altKey) return;
+    if (String(event.key || "").toLowerCase() !== "z") return;
+
+    event.preventDefault();
+    undoErase();
+  });
 }
 
 async function bootstrap() {

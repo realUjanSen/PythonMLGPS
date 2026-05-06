@@ -18,7 +18,9 @@ function getSourceFolder(sourceRaw) {
 
 // Serve static files
 app.use(express.static(__dirname));
-app.use(express.json());
+// Allow larger JSON payloads for CSV save requests (client may send full CSV text)
+app.use(express.json({ limit: "10mb" }));
+app.use(express.urlencoded({ limit: "10mb", extended: true }));
 
 function readCsvAsObjects(filePath) {
   if (!fs.existsSync(filePath)) return [];
@@ -96,6 +98,44 @@ app.get("/api/delete-csv", (req, res) => {
   } catch (error) {
     console.error("Error deleting file:", error);
     res.status(500).json({ error: "Failed to delete file" });
+  }
+});
+
+app.post("/api/save-csv", (req, res) => {
+  try {
+    const payload = req.body || {};
+    const files = Array.isArray(payload.files)
+      ? payload.files
+      : payload.fileName && payload.csvText
+        ? [{ fileName: payload.fileName, csvText: payload.csvText }]
+        : [];
+
+    if (files.length === 0) {
+      return res.status(400).json({ error: "No CSV files provided" });
+    }
+
+    const saved = [];
+    for (const file of files) {
+      const fileName = String(file.fileName || "");
+      const csvText = String(file.csvText || "");
+
+      if (!fileName || fileName.includes("..") || fileName.includes("/") || fileName.includes("\\")) {
+        return res.status(400).json({ error: `Invalid file name: ${fileName}` });
+      }
+
+      const filePath = path.join(CSV_FOLDERS.original, fileName);
+      if (path.dirname(filePath) !== CSV_FOLDERS.original) {
+        return res.status(400).json({ error: `Invalid file path: ${fileName}` });
+      }
+
+      fs.writeFileSync(filePath, csvText, "utf8");
+      saved.push(fileName);
+    }
+
+    res.json({ success: true, saved });
+  } catch (error) {
+    console.error("Error saving CSV file(s):", error);
+    res.status(500).json({ error: "Failed to save CSV file(s)" });
   }
 });
 

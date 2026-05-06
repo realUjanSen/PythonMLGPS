@@ -1,4 +1,4 @@
-Timestamp,Latitude,Longitude,Accuracy(m),Speed(m/s),Bearing(°),Altitude(m),Satellite,Country
+Timestamp,Latitude,Longitude,Accuracy(m),Speed(m/s),Bearing(ï¿½),Altitude(m),Satellite,Country
 2026-04-14T08:07:59.091000,22.519211666666667,88.38082833333334,3.5,0.0,0.0,-52.6,GPS,United States
 2026-04-14T08:08:04,22.519251666666666,88.38133666666666,4.0,11.190061569213867,83.37000274658203,-51.9,GPS,United States
 2026-04-14T08:08:09,22.519373333333338,88.38195333333333,4.0,10.907478332519531,82.02999877929688,-51.9,GPS,United States

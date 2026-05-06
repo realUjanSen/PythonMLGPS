@@ -9,6 +9,13 @@ from pathlib import Path
 import joblib
 import numpy as np
 import pandas as pd
+import warnings
+import matplotlib
+
+# Use a non-GUI backend and silence noisy resource tracker warnings on Windows.
+warnings.filterwarnings("ignore", message="resource_tracker:.*")
+warnings.filterwarnings("ignore", message=".*FileNotFoundError.*", category=UserWarning)
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 try:
     from scipy.spatial import cKDTree
@@ -16,7 +23,7 @@ except Exception:
     cKDTree = None
 from sklearn.ensemble import HistGradientBoostingRegressor, RandomForestRegressor
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
-from sklearn.model_selection import GroupShuffleSplit
+from sklearn.model_selection import GroupShuffleSplit, learning_curve
 
 try:
     from xgboost import XGBRegressor
@@ -59,6 +66,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--bin-meters", type=float, default=120.0, help="Segment bin size in meters.")
     parser.add_argument("--out-dir", default="model_outputs", help="Output directory.")
     parser.add_argument("--snapped-out-dir", default="csv_snapped", help="Output directory for snapped CSV copies.")
+    parser.add_argument(
+        "--skip-resnap",
+        action="store_true",
+        default=False,
+        help="If set, use existing snapped CSV files in --snapped-out-dir when present and skip re-snapping those sessions.",
+    )
     return parser.parse_args()
 
 
@@ -450,6 +463,9 @@ def build_training_table(
 
         start_ts = row["start_ts"]
         minute_of_day = int(start_ts.hour * 60 + start_ts.minute)
+        progress_ratio = float(row["progress_m"] / max(1.0, ref.total_m))
+        remaining_ratio = 1.0 - progress_ratio
+        sample_weight = float(1.0 + 3.0 * (remaining_ratio ** 2))
 
         rows.append(
             {
@@ -458,12 +474,14 @@ def build_training_table(
                 "vehicle_class": 0 if str(row.get("vehicle_class", "")).lower().startswith("shuttle") else 1,
                 "start_minute": minute_of_day,
                 "weekday": int(start_ts.dayofweek),
-                "progress_ratio": float(row["progress_m"] / max(1.0, ref.total_m)),
+                "progress_ratio": progress_ratio,
                 "offroute_m": float(row["offroute_m"]),
                 "speed_kph": float(row["speed_kph"]) if np.isfinite(row["speed_kph"]) else global_speed,
                 "global_bin_speed_kph": global_speed,
                 "bin_session_support": support,
                 "target_eta_min": float(row["eta_remaining_min"]),
+                # Emphasize longer-remaining route segments more than short hops.
+                "sample_weight": sample_weight,
             }
         )
 
@@ -488,6 +506,7 @@ def train_models(train_df: pd.DataFrame, t0: float) -> tuple[dict, str, pd.DataF
 
     X = train_df[feature_cols]
     y = train_df["target_eta_min"]
+    sample_weight = train_df["sample_weight"].to_numpy(dtype=float)
     groups = train_df["session_id"]
 
     splitter = GroupShuffleSplit(n_splits=1, test_size=0.25, random_state=42)
@@ -495,13 +514,16 @@ def train_models(train_df: pd.DataFrame, t0: float) -> tuple[dict, str, pd.DataF
 
     X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
     y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
+    w_train = sample_weight[train_idx]
+    w_test = sample_weight[test_idx]
 
     candidates: dict[str, object] = {
         "random_forest": RandomForestRegressor(
             n_estimators=300,
             random_state=42,
             n_jobs=-1,
-            min_samples_leaf=5,
+            min_samples_leaf=1,
+            max_depth=None,
         ),
         "hist_gradient_boosting": HistGradientBoostingRegressor(
             random_state=42,
@@ -514,7 +536,7 @@ def train_models(train_df: pd.DataFrame, t0: float) -> tuple[dict, str, pd.DataF
 
     if XGBRegressor is not None:
         candidates["xgboost"] = XGBRegressor(
-            n_estimators=600,
+            n_estimators=200,
             max_depth=8,
             learning_rate=0.04,
             subsample=0.85,
@@ -537,28 +559,44 @@ def train_models(train_df: pd.DataFrame, t0: float) -> tuple[dict, str, pd.DataF
             model.fit(
                 X_train,
                 y_train,
+                sample_weight=w_train,
                 eval_set=[(X_train, y_train), (X_test, y_test)],
                 verbose=False,
             )
             xgb_history = model.evals_result()
         else:
-            model.fit(X_train, y_train)
+            model.fit(X_train, y_train, sample_weight=w_train)
 
         pred = model.predict(X_test)
         mae = mean_absolute_error(y_test, pred)
         rmse = math.sqrt(mean_squared_error(y_test, pred))
         r2 = r2_score(y_test, pred)
-        metrics.append({"model": name, "mae_min": mae, "rmse_min": rmse, "r2": r2})
+        weighted_mae = mean_absolute_error(y_test, pred, sample_weight=w_test)
+        weighted_rmse = math.sqrt(mean_squared_error(y_test, pred, sample_weight=w_test))
+        weighted_r2 = r2_score(y_test, pred, sample_weight=w_test)
+        metrics.append({
+            "model": name,
+            "mae_min": mae,
+            "rmse_min": rmse,
+            "r2": r2,
+            "weighted_mae_min": weighted_mae,
+            "weighted_rmse_min": weighted_rmse,
+            "weighted_r2": weighted_r2,
+        })
         fitted[name] = model
         predictions[name] = pred
 
-    metrics_df = pd.DataFrame(metrics).sort_values("mae_min").reset_index(drop=True)
+    metrics_df = pd.DataFrame(metrics).sort_values("weighted_mae_min").reset_index(drop=True)
     best_name = metrics_df.iloc[0]["model"]
 
     eval_artifacts = {
         "y_test": np.asarray(y_test),
         "predictions": predictions,
         "xgb_history": xgb_history,
+        "X_train": X_train,
+        "y_train": np.asarray(y_train),
+        "sample_weight_train": w_train,
+        "groups_train": groups.iloc[train_idx],
     }
     return fitted, best_name, metrics_df, feature_cols, eval_artifacts
 
@@ -606,6 +644,8 @@ def evaluate_on_baseline_sessions(
 def export_training_plots(metrics_df: pd.DataFrame, eval_artifacts: dict, out_dir: Path) -> list[str]:
     out_dir.mkdir(parents=True, exist_ok=True)
     written: list[str] = []
+    start_time = time.time()
+    progress_count = 0
 
     # Model comparison chart.
     fig = plt.figure(figsize=(10, 5))
@@ -623,6 +663,8 @@ def export_training_plots(metrics_df: pd.DataFrame, eval_artifacts: dict, out_di
     fig.savefig(path, dpi=160)
     plt.close(fig)
     written.append(path.as_posix())
+    progress_count += 1
+    print(f"[{time.time() - start_time:6.1f}s] Plots: {progress_count} saved", flush=True)
 
     # Prediction scatter for each model.
     y_test = np.asarray(eval_artifacts.get("y_test", []), dtype=float)
@@ -646,6 +688,8 @@ def export_training_plots(metrics_df: pd.DataFrame, eval_artifacts: dict, out_di
         fig.savefig(path, dpi=160)
         plt.close(fig)
         written.append(path.as_posix())
+        progress_count += 1
+        print(f"[{time.time() - start_time:6.1f}s] Plots: {progress_count} saved", flush=True)
 
     # XGBoost learning curve if available.
     xgb_history = eval_artifacts.get("xgb_history")
@@ -666,6 +710,175 @@ def export_training_plots(metrics_df: pd.DataFrame, eval_artifacts: dict, out_di
             fig.savefig(path, dpi=160)
             plt.close(fig)
             written.append(path.as_posix())
+            progress_count += 1
+            print(f"[{time.time() - start_time:6.1f}s] Plots: {progress_count} saved (XGBoost learning)", flush=True)
+
+    # Random Forest learning curve using cross-validated RMSE.
+    X_train = eval_artifacts.get("X_train")
+    y_train = np.asarray(eval_artifacts.get("y_train", []), dtype=float)
+    if X_train is not None and y_train.size >= 20:
+        try:
+            # Use fewer trees and avoid parallel workers here to prevent nested
+            # parallelism with `learning_curve` which can spawn its own workers.
+            rf_curve_model = RandomForestRegressor(
+                n_estimators=100,
+                random_state=42,
+                n_jobs=1,
+                min_samples_leaf=5,
+            )
+            cv_folds = 5 if y_train.size >= 100 else 3
+            # Run learning_curve in a single job to avoid oversubscription
+            # on machines where tree estimators also use threads.
+            print(f"[{time.time() - start_time:6.1f}s] Starting RF learning_curve (this may take a moment)...", flush=True)
+            train_sizes, train_scores, valid_scores = learning_curve(
+                estimator=rf_curve_model,
+                X=X_train,
+                y=y_train,
+                train_sizes=np.linspace(0.2, 1.0, 6),
+                cv=cv_folds,
+                scoring="neg_root_mean_squared_error",
+                n_jobs=1,
+                shuffle=True,
+                random_state=42,
+            )
+            print(f"[{time.time() - start_time:6.1f}s] Finished RF learning_curve", flush=True)
+            train_rmse = -np.mean(train_scores, axis=1)
+            valid_rmse = -np.mean(valid_scores, axis=1)
+
+            fig = plt.figure(figsize=(8, 4))
+            ax = fig.add_subplot(1, 1, 1)
+            ax.plot(train_sizes, train_rmse, marker="o", label="Train RMSE", linewidth=1.5)
+            ax.plot(train_sizes, valid_rmse, marker="o", label="Validation RMSE", linewidth=1.5)
+            ax.set_title("Random Forest Learning Curve", fontsize=11)
+            ax.set_xlabel("Training Samples", fontsize=10)
+            ax.set_ylabel("RMSE", fontsize=10)
+            ax.legend(fontsize=9)
+            fig.tight_layout()
+            path = out_dir / "random_forest_learning_curve.png"
+            fig.savefig(path, dpi=96, quality=85)
+            plt.close(fig)
+            written.append(path.as_posix())
+            progress_count += 1
+            print(f"[{time.time() - start_time:6.1f}s] Plots: {progress_count} saved (RF learning)", flush=True)
+        except Exception:
+            pass
+
+    # Group-aware Random Forest learning curve (session-level sampling) if session groups provided.
+    groups_train = eval_artifacts.get("groups_train")
+    if X_train is not None and groups_train is not None and len(groups_train.unique()) >= 4:
+        try:
+            groups = np.asarray(groups_train)
+            unique_groups = np.unique(groups)
+            min_sessions = max(2, int(len(unique_groups) * 0.1))
+            max_sessions = max(2, len(unique_groups) - 2)
+            points = 6
+            train_session_counts = np.unique(np.round(np.linspace(min_sessions, max_sessions, points)).astype(int))
+
+            # Reduce repeats and tree count to speed up diagnostics.
+            n_repeats = 3
+            train_means = []
+            train_stds = []
+            val_means = []
+            val_stds = []
+            raw = {}
+
+            for idx_count, count in enumerate(train_session_counts):
+                t_scores = []
+                v_scores = []
+                for r in range(n_repeats):
+                    rng = np.random.RandomState(1000 + r)
+                    train_sess = rng.choice(unique_groups, size=count, replace=False)
+                    mask = np.isin(groups, train_sess)
+                    if mask.sum() < 10 or (~mask).sum() < 10:
+                        continue
+                    X_tr = X_train[mask]
+                    y_tr = np.asarray(eval_artifacts.get("y_train"))[mask]
+                    X_val = X_train[~mask]
+                    y_val = np.asarray(eval_artifacts.get("y_train"))[~mask]
+                    # Keep single-threaded here to avoid nested parallelism and
+                    # reduce tree count for quicker diagnostics.
+                    model = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=1, min_samples_leaf=5)
+                    model.fit(X_tr, y_tr)
+                    t_pred = model.predict(X_tr)
+                    v_pred = model.predict(X_val)
+                    t_rmse = float(np.sqrt(mean_squared_error(y_tr, t_pred)))
+                    v_rmse = float(np.sqrt(mean_squared_error(y_val, v_pred)))
+                    t_scores.append(t_rmse)
+                    v_scores.append(v_rmse)
+                train_means.append(float(np.mean(t_scores)) if t_scores else float('nan'))
+                train_stds.append(float(np.std(t_scores)) if t_scores else float('nan'))
+                val_means.append(float(np.mean(v_scores)) if v_scores else float('nan'))
+                val_stds.append(float(np.std(v_scores)) if v_scores else float('nan'))
+                raw[int(count)] = {"train": t_scores, "val": v_scores}
+                # Report fine-grained progress for the group-aware RF loop.
+                pct = int(100.0 * (idx_count + 1) / len(train_session_counts))
+                print(f"[{time.time() - start_time:6.1f}s] RF group-aware: {idx_count+1}/{len(train_session_counts)} ({pct}%)", flush=True)
+
+            fig, ax = plt.subplots(figsize=(8, 4))
+            ax.plot(train_session_counts, train_means, marker='o', label='Train RMSE', linewidth=1.5)
+            ax.fill_between(train_session_counts, np.array(train_means) - np.array(train_stds), np.array(train_means) + np.array(train_stds), alpha=0.15)
+            ax.plot(train_session_counts, val_means, marker='o', label='Validation RMSE', linewidth=1.5)
+            ax.fill_between(train_session_counts, np.array(val_means) - np.array(val_stds), np.array(val_means) + np.array(val_stds), alpha=0.15)
+            ax.set_xlabel('Training Sessions', fontsize=10)
+            ax.set_ylabel('RMSE', fontsize=10)
+            ax.set_title('RF Group-aware Learning Curve', fontsize=11)
+            ax.legend(fontsize=9)
+            fig.tight_layout()
+            path = out_dir / 'rf_group_learning_curve.png'
+            fig.savefig(path, dpi=96, quality=85)
+            plt.close(fig)
+            written.append(path.as_posix())
+            progress_count += 1
+            print(f"[{time.time() - start_time:6.1f}s] Plots: {progress_count} saved (RF group-aware)", flush=True)
+
+            # Save raw numbers
+            try:
+                import json as _json
+
+                with open(out_dir / 'rf_learning_curve_raw.json', 'w', encoding='utf-8') as f:
+                    _json.dump({'counts': train_session_counts.tolist(), 'train_means': train_means, 'train_stds': train_stds, 'val_means': val_means, 'val_stds': val_stds, 'raw': raw}, f)
+                written.append((out_dir / 'rf_learning_curve_raw.json').as_posix())
+                print(f"[{time.time() - start_time:6.1f}s] Saved rf_learning_curve_raw.json", flush=True)
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    # Accuracy details summary (regression-specific). Confusion matrix is not applicable.
+    try:
+        best_model_name = metrics_df.iloc[0]['model'] if not metrics_df.empty else None
+        lines = []
+        lines.append('Note: This is a regression problem (predicting minutes). A confusion matrix is not applicable.')
+        lines.append('Use MAE, RMSE and R^2 as quality metrics.')
+        lines.append('')
+        lines.append('Model metrics:')
+        for _, row in metrics_df.iterrows():
+            lines.append(f"- {row['model']}: MAE={row['mae_min']:.3f} min, RMSE={row['rmse_min']:.3f} min, R2={row['r2']:.3f}")
+
+        # Residual histogram for best model if available
+        y_test = np.asarray(eval_artifacts.get('y_test', []), dtype=float)
+        preds = eval_artifacts.get('predictions', {}) or {}
+        if best_model_name and best_model_name in preds and y_test.size > 0:
+            residuals = preds[best_model_name] - y_test
+            fig = plt.figure(figsize=(8, 4))
+            ax = fig.add_subplot(1, 1, 1)
+            ax.hist(residuals, bins=50, alpha=0.8)
+            ax.set_title(f"Residuals Histogram ({best_model_name})")
+            ax.set_xlabel('Prediction - Actual (min)')
+            ax.set_ylabel('Count')
+            fig.tight_layout()
+            path = out_dir / 'residuals_hist.png'
+            fig.savefig(path, dpi=160)
+            plt.close(fig)
+            written.append(path.as_posix())
+            lines.append(f'')
+            lines.append(f'Residuals (best model = {best_model_name}): mean={float(np.mean(residuals)):.3f}, std={float(np.std(residuals)):.3f}, median={float(np.median(residuals)):.3f}')
+
+        with open(out_dir / 'accuracy_details.txt', 'w', encoding='utf-8') as f:
+            f.write('\n'.join(lines))
+        written.append((out_dir / 'accuracy_details.txt').as_posix())
+    except Exception:
+        pass
 
     return written
 
@@ -802,9 +1015,63 @@ def main() -> None:
     for i, session in enumerate(sessions, start=1):
         route_type = session["route_type"]
         ref = ref_map[route_type]
-        matched = match_session_to_reference(session, ref, args.bin_meters)
+        # If requested, and a snapped CSV already exists for this session, load it and skip re-snapping.
+        matched = None
+        if args.skip_resnap:
+            try:
+                snapped_out_dir.mkdir(parents=True, exist_ok=True)
+            except Exception:
+                pass
+            # exported snapped filename convention: original_stem + "_snapped.csv"
+            orig = Path(session["file_name"]).name
+            stem = Path(orig).stem
+            snapped_name = stem + "_snapped.csv"
+            snapped_path = snapped_out_dir / snapped_name
+            if snapped_path.exists():
+                try:
+                    matched = pd.read_csv(snapped_path)
+                    # Normalize older snapped CSV column names if present
+                    if "SnapProgressM" in matched.columns and "progress_m" not in matched.columns:
+                        matched = matched.rename(columns={"SnapProgressM": "progress_m", "SnapOffrouteM": "offroute_m"})
+                    # If bin_idx missing but progress is present, compute it from bin size and reference
+                    if "bin_idx" not in matched.columns and "progress_m" in matched.columns:
+                        try:
+                            matched["bin_idx"] = np.clip((matched["progress_m"] // args.bin_meters).astype(int), 0, max(0, ref.n_bins - 1))
+                        except Exception:
+                            matched["bin_idx"] = 0
+                    # Ensure speed_kph exists; if not, try to recompute from timestamps and progress
+                    if "speed_kph" not in matched.columns and "Timestamp" in matched.columns and "progress_m" in matched.columns:
+                        try:
+                            dt_s = pd.to_datetime(matched["Timestamp"]).diff().dt.total_seconds().to_numpy()
+                            dp_m = matched["progress_m"].diff().to_numpy()
+                            speed_kph = np.full(len(matched), np.nan)
+                            valid = (dt_s > 0.5) & (dt_s <= 300) & (dp_m >= 0)
+                            speed_kph[valid] = np.clip((dp_m[valid] / dt_s[valid]) * 3.6, 0.5, 90.0)
+                            matched["speed_kph"] = speed_kph
+                        except Exception:
+                            matched["speed_kph"] = np.nan
+                    # Ensure eta_remaining_min exists (time to end of session)
+                    if "eta_remaining_min" not in matched.columns and "Timestamp" in matched.columns:
+                        try:
+                            matched["Timestamp"] = pd.to_datetime(matched["Timestamp"], errors="coerce")
+                            if len(matched) > 0:
+                                end_ts = matched["Timestamp"].iloc[-1]
+                                matched["eta_remaining_min"] = (end_ts - matched["Timestamp"]).dt.total_seconds() / 60.0
+                            else:
+                                matched["eta_remaining_min"] = np.nan
+                        except Exception:
+                            matched["eta_remaining_min"] = np.nan
+                except Exception:
+                    matched = None
 
-        observed_len_m = float(matched["progress_m"].max() - matched["progress_m"].min())
+        if matched is None:
+            matched = match_session_to_reference(session, ref, args.bin_meters)
+
+        # compute observed length; if loaded from CSV it should contain progress_m
+        try:
+            observed_len_m = float(matched["progress_m"].max() - matched["progress_m"].min())
+        except Exception:
+            observed_len_m = 0.0
         coverage_ratio = observed_len_m / max(1.0, ref.total_m)
 
         matched = matched.assign(
@@ -945,6 +1212,28 @@ def main() -> None:
     choke_df.to_csv(out_dir / "choke_points.csv", index=False)
     log_step("Saved choke point candidates", t0)
 
+    # Export per-session statistics for session-aware blending during prediction.
+    session_stats_rows = []
+    for _, row in session_meta_df.iterrows():
+        session_id = int(row["session_id"])
+        route_type = row["route_type"]
+        if session_id in session_match_map:
+            match = session_match_map[session_id]
+            mean_eta = float(match["eta_remaining_min"].mean()) if "eta_remaining_min" in match.columns else np.nan
+            mean_speed = float(match["speed_kph"].mean()) if "speed_kph" in match.columns else np.nan
+            session_stats_rows.append({
+                "session_id": session_id,
+                "route_type": route_type,
+                "file_name": row["file_name"],
+                "mean_eta_min": mean_eta,
+                "mean_speed_kph": mean_speed,
+            })
+    
+    if session_stats_rows:
+        session_stats_df = pd.DataFrame(session_stats_rows)
+        session_stats_df.to_csv(out_dir / "session_statistics.csv", index=False)
+        log_step(f"Saved per-session statistics ({len(session_stats_df)} sessions)", t0)
+
     summary = {
         "sessions_used": int(session_meta_df["session_id"].nunique()),
         "morning_sessions": int((session_meta_df["route_type"] == "morning").sum()),
@@ -960,6 +1249,7 @@ def main() -> None:
             "baseline_metrics_csv": str((out_dir / "baseline_test_metrics.csv").as_posix()),
             "training_table_csv": str((out_dir / "training_table.csv").as_posix()),
             "completed_sessions_csv": str((out_dir / "sessions_completed_with_imputation.csv").as_posix()),
+            "session_statistics_csv": str((out_dir / "session_statistics.csv").as_posix()),
             "choke_points_csv": str((out_dir / "choke_points.csv").as_posix()),
             "profile_morning_csv": str((out_dir / "route_profile_morning.csv").as_posix()),
             "profile_evening_csv": str((out_dir / "route_profile_evening.csv").as_posix()),

@@ -235,6 +235,28 @@
     </section>
 
     <section>
+      <h2>4C) Google Fused Location Limitations — Clustering and Off-Road Bias</h2>
+      <div class="card small">
+        <p>
+          The Google Location Services fused location provider (a typical source in Android apps) merges GPS, Wi-Fi, and cellular signal data to estimate position.
+          While often more stable than raw GPS, this fusion creates predictable pathologies:
+        </p>
+        <ul>
+          <li><strong>Cluster Convergence:</strong> When Google's estimator has high confidence in a location (e.g., a known Wi-Fi AP or persistent cellular triangulation), it can lock onto that point across multiple requests, resulting in 5–10+ duplicate coordinates. This appears as a stationary cluster or "frozen" position for several consecutive samples.</li>
+          <li><strong>Off-Road Drift into Structures:</strong> The fusion engine sometimes favors nearby Wi-Fi or cellular ground-truth over actual GPS heading, causing abrupt off-road jumps into nearby buildings or parking areas—even when the vehicle is actively on the road.</li>
+          <li><strong>Coherent Bias Pattern:</strong> Unlike random jitter, fused location errors often return to the same point (e.g., the Wi-Fi router location), making them both predictable and difficult to filter naively. Simple distance thresholds alone fail because the repeated point is internally consistent.</li>
+        </ul>
+        <p>
+          <strong>Impact on ETA Modeling:</strong> Clusters inflate the per-segment sample count at hotspots without adding real speed information, and off-road jumps can distort the velocity computation for affected segments. The elastic snapping algorithm mitigates this downstream, but upstream deduplication and Wi-Fi-bias detection would reduce noise earlier in the pipeline.
+        </p>
+        <figure style="margin-top: 12px; border: 1px solid var(--line); border-radius: 8px; padding: 8px; background: #fff; max-width: 400px;">
+          <img class="chart" src="fusedlocationerror.png" alt="Example of Google fused location clustering and off-road bias" style="max-width: 100%; height: auto;">
+          <figcaption><strong>Example:</strong> Multiple overlapping route traces near Army Camp Sector V, Kolkata. The thick green and blue clusters show repeated locks onto a single position (~6 samples), and the tangled off-road paths into building perimeters illustrate the Wi-Fi-induced positional bias. Raw snapping alone cannot undo this fundamental location uncertainty; preprocessing and deduplication are necessary.</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section>
       <h2>5) Partial Session Handling</h2>
       <p>
         Sessions with incomplete route coverage are retained. The observed section contributes directly, while missing bins are imputed from weighted route profiles built across sessions.
@@ -257,14 +279,32 @@
           <img class="chart" src="model_outputs/pred_vs_actual.png" alt="Predicted vs actual chart">
         </div>
       </div>
-      <div class="card" style="margin-top:10px;">
-        <h3>XGBoost Learning Curve</h3>
-        <img class="chart" src="model_outputs/xgboost_learning_curve.png" alt="XGBoost learning curve">
+      <div class="grid" style="margin-top:10px;">
+        <div class="card">
+          <h3>Random Forest Learning Curve</h3>
+          <img class="chart" src="model_outputs/random_forest_learning_curve.png" alt="Random Forest learning curve">
+        </div>
+        <div class="card">
+          <h3>XGBoost Learning Curve</h3>
+          <img class="chart" src="model_outputs/xgboost_learning_curve.png" alt="XGBoost learning curve">
+        </div>
+      </div>
+      <div class="grid" style="margin-top:10px;">
+        <div class="card">
+          <h3>RF Group-aware Learning Curve</h3>
+          <img class="chart" src="model_outputs/rf_group_learning_curve.png" alt="RF group-aware learning curve">
+          <p class="small">Shown as mean ± std across repeated session-level splits. Raw numbers: <code>model_outputs/rf_learning_curve_raw.json</code></p>
+        </div>
+        <div class="card">
+          <h3>Residuals (Best Model)</h3>
+          <img class="chart" src="model_outputs/residuals_hist.png" alt="Residuals histogram">
+          <p class="small">See <code>model_outputs/accuracy_details.txt</code> for numeric MAE/RMSE/R² and notes about regression metrics.</p>
+        </div>
       </div>
     </section>
 
     <section>
-      <h2>8) Model Performance: Distance Traveled vs Remaining ETA</h2>
+      <h2>9) Model Performance: Distance Traveled vs Remaining ETA</h2>
       <p>
         This chart is computed from real route profile data, not synthetic samples. We use each profile point latitude/longitude to compute ground distance with the Haversine formula,
         then estimate remaining ETA from per-segment speed and congestion. X-axis is distance traveled from start (kilometers), Y-axis is remaining ETA (minutes).
@@ -282,14 +322,7 @@
         $$
       </div>
       <div class="card" style="margin-top:10px;">
-        <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px;align-items:end;">
-          <div>
-            <label for="curveRouteSelect">Route</label>
-            <select id="curveRouteSelect">
-              <option value="morning">Morning (Home to Office)</option>
-              <option value="evening">Evening (Office to Home)</option>
-            </select>
-          </div>
+        <div style="display:grid;grid-template-columns:minmax(0,1fr);gap:10px;align-items:end;">
           <div>
             <label for="curveStepSelect">Sampling Step</label>
             <select id="curveStepSelect">
@@ -299,7 +332,7 @@
             </select>
           </div>
         </div>
-        <div id="curveMeta" class="small" style="margin-top:8px;">Loading route curve...</div>
+        <div id="curveMeta" class="small" style="margin-top:8px;">Loading morning baseline curve...</div>
         <div class="chart-map-grid" style="margin-top: 8px;">
           <div>
             <div style="position: relative; height: 320px;">
@@ -316,14 +349,14 @@
           </div>
           <div>
             <div id="routeMap" class="route-map"></div>
-            <div id="routeMapStatus" class="route-map-note">Click a point on the chart to locate that point on the route.</div>
+            <div id="routeMapStatus" class="route-map-note">Morning baseline only. Click a point on the chart to locate that point on the route.</div>
           </div>
         </div>
       </div>
     </section>
 
     <section>
-      <h2>9) Training Parameters</h2>
+      <h2>10) Training Parameters</h2>
       <div class="card small">
         <ul>
           <li>Route references: morning=43, evening=35</li>
@@ -332,34 +365,109 @@
           <li>Features: route type, vehicle class, time-of-day, weekday, route progress, off-route distance, local/global speed context, support count</li>
           <li>Speed feature note: model uses computed speed from snapped progress over time (distance/time), not device satellite speed field.</li>
           <li>Target: ETA remaining minutes</li>
-          <li>Training command used: <code>C:/Python313/python.exe train_eta_model.py --bin-meters 60</code></li>
+          <li>Training command used: <code>C:/Python313/python.exe train_eta_model.py --bin-meters 60 --skip-resnap</code></li>
         </ul>
-        <pre class="cli">CLI output from the exact training run:
-[    0.3s] Loaded 23 valid sessions
-[    0.3s] Using references -> morning: session_043_20260424_081539_Home_to_Office.csv | evening: session_035_20260420_165549_Office_to_Home.csv
-[    0.5s] Snapped sessions: 23/23
-[    1.2s] Exported 23 snapped CSV file(s) to csv_snapped
-[    1.5s] Built profile for morning with 364 bins
-[    1.9s] Built profile for evening with 369 bins
-[    4.3s] Built training table with 22309 rows
-[    4.3s] Training model: random_forest
-[    6.2s] Training model: hist_gradient_boosting
-[    8.9s] Training model: xgboost
-[   11.0s] Training complete. Best model: xgboost
-[   12.8s] Wrote training summary JSON
-
-Baseline test metrics emitted by training:
-model,mae_min,rmse_min,r2,rows
-xgboost,22.375758828769296,30.09077848945506,0.09323868024278104,1880
-hist_gradient_boosting,28.029334011417426,37.49523718705204,-0.4079212016495075,1880
-random_forest,29.704005606507174,41.95243304630297,-0.7625459357564113,1880</pre>
+        <div id="trainingParamsBox" class="small">Loading latest training metrics...</div>
       </div>
     </section>
 
     <section>
-      <h2>10) Deployed Usage</h2>
-      <p>Use the deployed app at <a href="eta_model_app.html">eta_model_app.html</a>.</p>
+      <h2>7) Session-Aware Ensemble: General + Specific Accuracy</h2>
       <div class="card small">
+        <p><b>Problem:</b> A single global model trained on mixed sessions achieves <b>R² = 0.29 on baseline sessions</b> (good) but <b>R² = -0.52 on unseen sessions</b> (bad). This gap reveals <b>session-level domain shift</b>: each session has its own speed patterns, congestion signature, and traffic conditions.</p>
+        <p><b>Solution:</b> <b>Session-aware ensemble</b> blends two sources of truth:</p>
+        <ul>
+          <li><b>General Accuracy</b> = XGBoost + local profile predictions (70% weight). Captures broad route patterns learned from all 34 sessions.</li>
+          <li><b>Specific Accuracy</b> = per-session baseline ETA (30% weight). Captures this particular session's typical completion time.</li>
+        </ul>
+        <p><b>Example (Session 43, Morning, 50% Progress at 08:00):</b></p>
+        <div style="background:#f9fbff; padding:8px; border-radius:6px; margin:8px 0; font-family:monospace; font-size:11px;">
+          <div>Model predicts: 30.11 min  <span style="color:#888;">&larr; General (XGBoost alone)</span></div>
+          <div>Local profile: 38.09 min  <span style="color:#888;">&larr; Route segment 50%→100%</span></div>
+          <div style="margin:4px 0;">Model + profile blend: 0.55×30.11 + 0.45×38.09 = <b>33.75 min</b></div>
+          <div style="margin:4px 0; padding:4px; background:#e8f5e9; border-left:2px solid #4caf50;">
+            <b>Session 43 baseline:</b> 26.63 min  <span style="color:#888;">&larr; Specific (session history)</span></div>
+          <div style="margin:4px 0; padding:4px; background:#fff9c4; border-left:2px solid #fbc02d;">
+            <b>Final blended ETA:</b> 0.70×33.75 + 0.30×26.63 = <b>31.58 min</b> ✓
+          </div>
+        </div>
+        <p><b>Benefit:</b> The 31.58 min estimate is anchored to session 43's typical behavior (26.63 min) while staying responsive to current route conditions. Without session blending, the estimate would be 33.75 min—overestimating for a session that usually finishes faster.</p>
+        <p><b>Use in `predict_eta.py`:</b></p>
+        <pre class="cli">C:/Python313/python.exe predict_eta.py --route morning --start-time 08:00 --progress-ratio 0.5 --session-id 43</pre>
+        <p>Output includes: <code>session_aware_blend_weight: 0.3</code>, <code>session_baseline_eta_min: 26.63</code></p>
+      </div>
+    </section>
+
+    <section>
+      <h2>8) Model Metrics and Accuracy Trade-offs</h2>
+      <div class="card small">
+        <p><b>Cross-Session R² (grouped by session_id):</b></p>
+        <table style="width:100%; border-collapse:collapse; margin:8px 0;">
+          <tr style="background:#f0f4f8; border-bottom:1px solid #d7e1ee;">
+            <th style="padding:6px; text-align:left;">Model</th>
+            <th style="padding:6px; text-align:center;">MAE (min)</th>
+            <th style="padding:6px; text-align:center;">RMSE (min)</th>
+            <th style="padding:6px; text-align:center; color:#d32f2f;"><b>R² (Cross-Session)</b></th>
+          </tr>
+          <tr style="border-bottom:1px solid #d7e1ee;">
+            <td style="padding:6px;"><b>XGBoost (Best)</b></td>
+            <td style="padding:6px; text-align:center;">19.61</td>
+            <td style="padding:6px; text-align:center;">24.29</td>
+            <td style="padding:6px; text-align:center; background:#ffebee;"><b>-0.52</b></td>
+          </tr>
+          <tr style="border-bottom:1px solid #d7e1ee;">
+            <td style="padding:6px;">Hist Gradient Boosting</td>
+            <td style="padding:6px; text-align:center;">22.82</td>
+            <td style="padding:6px; text-align:center;">28.33</td>
+            <td style="padding:6px; text-align:center; background:#ffebee;"><b>-1.07</b></td>
+          </tr>
+          <tr style="border-bottom:1px solid #d7e1ee;">
+            <td style="padding:6px;">Random Forest</td>
+            <td style="padding:6px; text-align:center;">26.18</td>
+            <td style="padding:6px; text-align:center;">31.87</td>
+            <td style="padding:6px; text-align:center; background:#ffebee;"><b>-1.62</b></td>
+          </tr>
+        </table>
+        <p><b>Baseline Sessions Only R² (no domain shift):</b></p>
+        <table style="width:100%; border-collapse:collapse; margin:8px 0;">
+          <tr style="background:#f0f4f8; border-bottom:1px solid #d7e1ee;">
+            <th style="padding:6px; text-align:left;">Model</th>
+            <th style="padding:6px; text-align:center;">MAE (min)</th>
+            <th style="padding:6px; text-align:center;">RMSE (min)</th>
+            <th style="padding:6px; text-align:center; color:#2e7d32;"><b>R² (Baseline Only)</b></th>
+          </tr>
+          <tr style="border-bottom:1px solid #d7e1ee;">
+            <td style="padding:6px;"><b>XGBoost</b></td>
+            <td style="padding:6px; text-align:center;">11.73</td>
+            <td style="padding:6px; text-align:center;">17.23</td>
+            <td style="padding:6px; text-align:center; background:#e8f5e9;"><b>+0.29</b> ✓</td>
+          </tr>
+          <tr style="border-bottom:1px solid #d7e1ee;">
+            <td style="padding:6px;">Hist Gradient Boosting</td>
+            <td style="padding:6px; text-align:center;">14.46</td>
+            <td style="padding:6px; text-align:center;">22.91</td>
+            <td style="padding:6px; text-align:center; background:#ffebee;"><b>-0.26</b></td>
+          </tr>
+          <tr>
+            <td style="padding:6px;">Random Forest</td>
+            <td style="padding:6px; text-align:center;">21.64</td>
+            <td style="padding:6px; text-align:center;">32.13</td>
+            <td style="padding:6px; text-align:center; background:#ffebee;"><b>-1.48</b></td>
+          </tr>
+        </table>
+        <p><b>Interpretation:</b></p>
+        <ul>
+          <li><b>R² = -0.52 (cross-session):</b> Model performs worse than predicting the mean ETA on unseen sessions. Indicates high session-level heterogeneity.</li>
+          <li><b>R² = +0.29 (baseline only):</b> On familiar sessions, XGBoost explains 29% of variance. Session-aware blending (30% baseline weight) helps adapt predictions to known sessions.</li>
+          <li><b>Gap of ~0.81:</b> The large R² swing shows that <b>session identity is a hidden variable</b>. Future improvements: collect more diverse sessions or add explicit session/driver features.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section>
+      <h2>11) Deployed Usage</h2>
+      <div class="card small">
+        <p>Use the deployed app at <a href="eta_model_app.html">eta_model_app.html</a>.</p>
         <ol>
           <li>Choose route (morning/evening) and start time.</li>
           <li>Toggle mode: "Current Location" or "Set Destination".</li>
@@ -371,10 +479,11 @@ random_forest,29.704005606507174,41.95243304630297,-0.7625459357564113,1880</pre
     </section>
 
     <section>
-      <h2>11) Limitations and Edge Cases</h2>
+      <h2>12) Limitations and Edge Cases</h2>
       <div class="card small">
         <ul>
-          <li>Current accuracy is modest on held-out data: XGBoost test MAE is about 22.38 minutes, RMSE is about 30.09 minutes, and R² is about 0.093.</li>
+          <li><b>Cross-session test (grouped by session_id):</b> XGBoost shows R² ≈ <b>-0.52</b> (worse than mean baseline).</li>
+          <li><b>Baseline sessions only:</b> XGBoost shows R² ≈ <b>0.29</b> (positive, indicates domain shift). This gap reveals that models overfit to session-specific patterns and generalize poorly to new sessions.</li>
           <li>Small dataset size and route coverage gaps reduce model confidence across rare traffic states.</li>
           <li>Trip context is still under-specified: event spikes, weather effects, and incident-level disruptions are not yet represented.</li>
           <li>Snapped baselines improve consistency but can compress true detour behavior and lane-level deviations.</li>
@@ -394,7 +503,7 @@ random_forest,29.704005606507174,41.95243304630297,-0.7625459357564113,1880</pre
     </section>
 
     <section>
-      <h2>12) Expected Improvement with More Data + Bayesian ETA Modeling</h2>
+      <h2>13) Expected Improvement with More Data + Bayesian ETA Modeling</h2>
       <div class="card small">
         <p>
           As more sessions are collected, the model should improve because each route segment is observed under more traffic states and departure times.
@@ -402,7 +511,7 @@ random_forest,29.704005606507174,41.95243304630297,-0.7625459357564113,1880</pre
         </p>
         <h3>Additional Parameters That Should Be Added</h3>
         <ul>
-          <li>Trip start clock time from trip origin (not only current point time), so departures at 5:00 PM and 6:00 PM are treated as different traffic regimes.</li>
+          <!-- Trip start clock time already implemented; removed from suggestions -->
           <li>Route variant identity as an explicit variable for morning direction.</li>
           <li>Lagged congestion context (recent bins) to represent queue propagation.</li>
           <li>Calendar context (weekday/weekend, holiday/event flags) and weather/incident indicators when available.</li>
@@ -927,9 +1036,9 @@ random_forest,29.704005606507174,41.95243304630297,-0.7625459357564113,1880</pre
     }
 
     async function loadAndRenderCurve() {
-      const route = document.getElementById('curveRouteSelect').value;
+      const route = 'morning';
       const stepMeters = Number(document.getElementById('curveStepSelect').value || 50);
-      const routeLabel = route === 'morning' ? 'Morning (Home to Office)' : 'Evening (Office to Home)';
+      const routeLabel = 'Morning (Home to Office baseline)';
       const profile = await safeJson(`/api/route-profile?route=${encodeURIComponent(route)}`);
       const curve = buildKmVsEtaCurve(profile, stepMeters);
       if (!curve) {
@@ -976,12 +1085,18 @@ random_forest,29.704005606507174,41.95243304630297,-0.7625459357564113,1880</pre
 
       const metricsTable = document.getElementById('metricsTable');
       const metrics = Array.isArray(summary.metrics) ? summary.metrics : [];
+      const hasWeighted = metrics.length > 0 && Object.prototype.hasOwnProperty.call(metrics[0], 'weighted_mae_min');
       const rows = metrics.map((m) =>
-        `<tr><td>${m.model}</td><td>${Number(m.mae_min).toFixed(3)}</td><td>${Number(m.rmse_min).toFixed(3)}</td><td>${Number(m.r2).toFixed(3)}</td></tr>`
+        hasWeighted
+          ? `<tr><td>${m.model}</td><td>${Number(m.mae_min).toFixed(3)}</td><td>${Number(m.rmse_min).toFixed(3)}</td><td>${Number(m.weighted_mae_min).toFixed(3)}</td><td>${Number(m.weighted_rmse_min).toFixed(3)}</td><td>${Number(m.weighted_r2).toFixed(3)}</td><td>${Number(m.r2).toFixed(3)}</td></tr>`
+          : `<tr><td>${m.model}</td><td>${Number(m.mae_min).toFixed(3)}</td><td>${Number(m.rmse_min).toFixed(3)}</td><td>${Number(m.r2).toFixed(3)}</td></tr>`
       ).join('');
+      const metricsHead = hasWeighted
+        ? '<thead><tr><th>Model</th><th>MAE (min)</th><th>RMSE (min)</th><th>Weighted MAE (min)</th><th>Weighted RMSE (min)</th><th>Weighted R²</th><th>R²</th></tr></thead>'
+        : '<thead><tr><th>Model</th><th>MAE (min)</th><th>RMSE (min)</th><th>R2</th></tr></thead>';
       metricsTable.innerHTML = `
         <table>
-          <thead><tr><th>Model</th><th>MAE (min)</th><th>RMSE (min)</th><th>R2</th></tr></thead>
+          ${metricsHead}
           <tbody>${rows}</tbody>
         </table>
       `;
@@ -996,12 +1111,6 @@ random_forest,29.704005606507174,41.95243304630297,-0.7625459357564113,1880</pre
         });
       }
 
-      document.getElementById('curveRouteSelect').addEventListener('change', () => {
-        loadAndRenderCurve().catch((err) => {
-          console.error(err);
-          document.getElementById('curveMeta').textContent = `Failed to render curve: ${err.message}`;
-        });
-      });
       document.getElementById('curveStepSelect').addEventListener('change', () => {
         loadAndRenderCurve().catch((err) => {
           console.error(err);
@@ -1015,6 +1124,48 @@ random_forest,29.704005606507174,41.95243304630297,-0.7625459357564113,1880</pre
       document.getElementById('summaryBox').textContent = `Failed to load model summary: ${err.message}`;
       document.getElementById('curveMeta').textContent = `Failed to render curve: ${err.message}`;
     });
+
+    async function loadTrainingParameters() {
+      try {
+        const resp = await fetch('model_outputs/training_summary.json');
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        const box = document.getElementById('trainingParamsBox');
+        if (!box) return;
+
+        const metrics = Array.isArray(data.metrics) ? data.metrics : [];
+        const hasWeighted = metrics.length > 0 && Object.prototype.hasOwnProperty.call(metrics[0], 'weighted_mae_min');
+        const metricsRows = metrics.map((m) =>
+          hasWeighted
+            ? `<tr><td>${m.model}</td><td>${Number(m.mae_min).toFixed(3)}</td><td>${Number(m.rmse_min).toFixed(3)}</td><td>${Number(m.weighted_mae_min).toFixed(3)}</td><td>${Number(m.weighted_rmse_min).toFixed(3)}</td><td>${Number(m.weighted_r2).toFixed(4)}</td><td>${Number(m.r2).toFixed(4)}</td></tr>`
+            : `<tr><td>${m.model}</td><td>${Number(m.mae_min).toFixed(3)}</td><td>${Number(m.rmse_min).toFixed(3)}</td><td>${Number(m.r2).toFixed(4)}</td></tr>`
+        ).join('');
+        const metricsHeader = hasWeighted
+          ? '<thead><tr><th>Model</th><th>MAE (min)</th><th>RMSE (min)</th><th>Weighted MAE (min)</th><th>Weighted RMSE (min)</th><th>Weighted R²</th><th>R²</th></tr></thead>'
+          : '<thead><tr><th>Model</th><th>MAE (min)</th><th>RMSE (min)</th><th>R²</th></tr></thead>';
+
+        const html = `
+<pre class="cli">Latest training run: ${data.sessions_used} sessions (${data.morning_sessions} morning, ${data.evening_sessions} evening)
+Morning ref: ${data.morning_reference}
+Evening ref: ${data.evening_reference}
+
+Model metrics (test set):
+</pre>
+<table style="font-size:12px; margin-top:6px;">
+  ${metricsHeader}
+  <tbody>${metricsRows}</tbody>
+</table>
+<p class="small" style="margin-top:8px;">Weighted metrics emphasize longer-remaining route segments, which better matches how people use ETA apps.</p>
+        `;
+        box.innerHTML = html;
+      } catch (err) {
+        console.error('Failed to load training parameters:', err);
+        const box = document.getElementById('trainingParamsBox');
+        if (box) box.textContent = `Failed to load training parameters: ${err.message}`;
+      }
+    }
+
+    loadTrainingParameters();
 
     document.addEventListener('DOMContentLoaded', () => {
       if (window.renderMathInElement) {

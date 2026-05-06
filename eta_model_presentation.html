@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Kolkata ETA Model – Presentation</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 20px;
+    }
+    .presentation {
+      width: 100%;
+      max-width: 1000px;
+      background: white;
+      border-radius: 16px;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      height: 90vh;
+    }
+    .slide {
+      flex: 1;
+      display: none;
+      padding: 60px;
+      overflow-y: auto;
+      animation: slideIn 0.4s ease-in-out;
+    }
+    .slide.active {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+    }
+    @keyframes slideIn {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+    h1 { font-size: 48px; color: #667eea; margin-bottom: 20px; }
+    h2 { font-size: 36px; color: #667eea; margin-bottom: 20px; }
+    h3 { font-size: 24px; color: #764ba2; margin-top: 20px; margin-bottom: 10px; }
+    p { font-size: 18px; color: #333; line-height: 1.6; margin-bottom: 12px; }
+    ul, ol { margin-left: 30px; font-size: 16px; color: #555; line-height: 1.8; }
+    li { margin-bottom: 8px; }
+    .subtitle { font-size: 24px; color: #764ba2; font-weight: 300; }
+    .stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; margin-top: 30px; }
+    .stat-box {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      padding: 20px;
+      border-radius: 8px;
+      text-align: center;
+    }
+    .stat-number { font-size: 32px; font-weight: bold; }
+    .stat-label { font-size: 14px; margin-top: 8px; opacity: 0.9; }
+    .metric-table { width: 100%; border-collapse: collapse; margin-top: 20px; font-size: 16px; }
+    .metric-table th { background: #667eea; color: white; padding: 12px; text-align: left; }
+    .metric-table td { border-bottom: 1px solid #ddd; padding: 12px; }
+    .metric-table tr:nth-child(even) { background: #f9f9f9; }
+    .image-placeholder {
+      background: #f0f0f0;
+      border: 2px dashed #999;
+      border-radius: 8px;
+      padding: 30px;
+      text-align: center;
+      color: #666;
+      font-size: 16px;
+      margin: 20px 0;
+      min-height: 200px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .controls {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 20px 40px;
+      background: #f5f5f5;
+      border-top: 1px solid #ddd;
+    }
+    button {
+      background: #667eea;
+      color: white;
+      border: none;
+      padding: 12px 24px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 16px;
+      transition: background 0.3s;
+    }
+    button:hover { background: #764ba2; }
+    button:disabled { background: #ccc; cursor: not-allowed; }
+    .slide-counter { font-size: 18px; color: #667eea; font-weight: bold; }
+    .slide-title { font-size: 14px; color: #999; margin-top: 20px; }
+    .highlight { background: #fff3cd; padding: 15px; border-left: 4px solid #ffc107; border-radius: 4px; margin: 20px 0; }
+    .grid-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; }
+    .card { background: #f9f9f9; border: 1px solid #ddd; border-radius: 8px; padding: 15px; }
+    .accent { color: #667eea; font-weight: bold; }
+    @media (max-width: 768px) {
+      .slide { padding: 40px 20px; }
+      h1 { font-size: 32px; }
+      h2 { font-size: 24px; }
+      p { font-size: 16px; }
+      .stats { grid-template-columns: 1fr; }
+      .grid-2 { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="presentation">
+    <!-- Slide 1: Title -->
+    <div class="slide active">
+      <div>
+        <h1>Kolkata Bus ETA Model</h1>
+        <p class="subtitle">Predicting Arrival Times Using Machine Learning</p>
+        <div class="stats">
+          <div class="stat-box">
+            <div class="stat-number">34</div>
+            <div class="stat-label">GPS Sessions Collected</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-number">28K+</div>
+            <div class="stat-label">Training Samples</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-number">3</div>
+            <div class="stat-label">Models Trained</div>
+          </div>
+          <div class="stat-box">
+            <div class="stat-number">18.4 min</div>
+            <div class="stat-label">Best MAE</div>
+          </div>
+        </div>
+        <p style="text-align: center; color: #999; margin-top: 40px; font-size: 14px;">Press → to begin</p>
+      </div>
+    </div>
+
+    <!-- Slide 2: Problem Statement -->
+    <div class="slide">
+      <h2>Problem Statement</h2>
+      <p>Accurate ETA prediction in Kolkata traffic is challenging due to:</p>
+      <ul>
+        <li><span class="accent">Variable traffic patterns:</span> Congestion varies by time-of-day, day-of-week, and route variant</li>
+        <li><span class="accent">GPS noise:</span> Device inaccuracy and signal loss introduce jitter</li>
+        <li><span class="accent">Route complexity:</span> Morning and evening have distinct patterns and chokepoints</li>
+        <li><span class="accent">Limited context:</span> Weather, events, and incidents not yet captured</li>
+      </ul>
+      <div class="highlight">
+        <strong>Goal:</strong> Build a regression model that predicts remaining ETA (minutes) from current position, time, speed, and route context.
+      </div>
+    </div>
+
+    <!-- Slide 3: Data Collection -->
+    <div class="slide">
+      <h2>Data Collection & Route Baselines</h2>
+      <div class="grid-2">
+        <div>
+          <h3>Morning Route</h3>
+          <p><strong>Session 43:</strong> Home → Office</p>
+          <p>18 collected sessions</p>
+          <p>361 route bins (60m each)</p>
+        </div>
+        <div>
+          <h3>Evening Route</h3>
+          <p><strong>Session 35:</strong> Office → Home</p>
+          <p>16 collected sessions</p>
+          <p>351 route bins (60m each)</p>
+        </div>
+      </div>
+      <h3 style="margin-top: 30px;">Golden Baselines</h3>
+      <p>Two reference sessions define route geometry:</p>
+      <ul>
+        <li>Morning: <code style="background:#eee; padding:2px 6px;">session_043_20260424_081539_Home_to_Office.csv</code></li>
+        <li>Evening: <code style="background:#eee; padding:2px 6px;">session_035_20260420_165549_Office_to_Home.csv</code></li>
+      </ul>
+      <p style="margin-top: 20px; color: #666; font-size: 14px;">All sessions are snapped onto these baselines and discretized into bins.</p>
+    </div>
+
+    <!-- Slide 4: Data Processing -->
+    <div class="slide">
+      <h2>Data Processing Pipeline</h2>
+      <h3>1. GPS Snapping</h3>
+      <ul>
+        <li>Project raw GPS points onto route baseline polyline</li>
+        <li>Compute nearest perpendicular foot (snapped position)</li>
+        <li>Record on-route progress and off-route distance</li>
+      </ul>
+      <h3>2. Elastic Redistribution</h3>
+      <ul>
+        <li>Enforce monotonic progress (no backward jumps)</li>
+        <li>Smooth local clumping at merge/diverge sections</li>
+        <li>Reduce teleport-like artifacts</li>
+      </ul>
+      <h3>3. Feature Engineering</h3>
+      <ul>
+        <li>Progress ratio: (meters traveled) / (total route meters)</li>
+        <li>Speed context: local + global bin-level median speeds</li>
+        <li>Time-of-day: departure minute in 24-hour clock</li>
+        <li>Weekday, vehicle class, off-route distance</li>
+                <tr>
+                  <td><code>weekday</code></td>
+                  <td>Categorical</td>
+                  <td>0–6 (Monday–Sunday)</td>
+                </tr>
+      </ul>
+    </div>
+
+    <!-- Slide 5: Feature Engineering -->
+    <div class="slide">
+      <h2>Training Features (9 Total)</h2>
+      <table class="metric-table">
+        <thead>
+          <tr>
+            <th>Feature</th>
+            <th>Type</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>route_type</code></td>
+            <td>Categorical</td>
+            <td>0=Morning, 1=Evening</td>
+          </tr>
+          <tr>
+            <td><code>vehicle_class</code></td>
+            <td>Categorical</td>
+            <td>0=Shuttle, 1=Public Bus</td>
+          </tr>
+          <tr>
+            <td><code>start_minute</code></td>
+            <td>Numeric</td>
+            <td>Time of day (0–1439 minutes)</td>
+          </tr>
+          <tr>
+            <td><code>progress_ratio</code></td>
+            <td>Numeric</td>
+            <td>Distance traveled / total route</td>
+          </tr>
+          <tr>
+            <td><code>offroute_m</code></td>
+            <td>Numeric</td>
+            <td>Off-route distance (meters)</td>
+          </tr>
+          <tr>
+            <td><code>speed_kph</code></td>
+            <td>Numeric</td>
+            <td>Local segment speed (km/h)</td>
+          </tr>
+          <tr>
+            <td><code>global_bin_speed_kph</code></td>
+            <td>Numeric</td>
+            <td>Route bin median speed (km/h)</td>
+          </tr>
+          <tr>
+            <td><code>bin_session_support</code></td>
+            <td>Numeric</td>
+            <td># sessions observing this bin</td>
+          </tr>
+        </tbody>
+      </table>
+      <p style="margin-top: 15px; color: #666; font-size: 14px;"><strong>Target:</strong> <code>target_eta_min</code> = remaining time in minutes</p>
+    </div>
+
+    <!-- Slide 6: Model Selection -->
+    <div class="slide">
+      <h2>Models Trained & Tested</h2>
+      <div class="grid-2">
+        <div class="card">
+          <h3 style="margin-top: 0;">Random Forest</h3>
+          <p><strong>n_estimators:</strong> 300</p>
+          <p><strong>min_samples_leaf:</strong> 5</p>
+          <p>Baseline ensemble, robust to noise</p>
+        </div>
+        <div class="card">
+          <h3 style="margin-top: 0;">Hist Gradient Boosting</h3>
+          <p><strong>max_depth:</strong> 8</p>
+          <p><strong>learning_rate:</strong> 0.05</p>
+          <p>Fast, memory-efficient boosting</p>
+        </div>
+      </div>
+      <div class="card" style="margin-top: 20px;">
+        <h3 style="margin-top: 0;">XGBoost ⭐ (Best)</h3>
+        <p><strong>n_estimators:</strong> 600 | <strong>max_depth:</strong> 8 | <strong>learning_rate:</strong> 0.04</p>
+        <p><strong>subsample:</strong> 0.85 | <strong>colsample_bytree:</strong> 0.85</p>
+        <p>Winning model with lowest MAE on test set</p>
+      </div>
+    </div>
+
+    <!-- Slide 7: Model Metrics -->
+    <div class="slide">
+      <h2>Test Set Performance</h2>
+      <table class="metric-table">
+        <thead>
+          <tr>
+            <th>Model</th>
+            <th>MAE (min)</th>
+            <th>RMSE (min)</th>
+            <th>R²</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr style="background: #e8f5e9;">
+            <td><strong>XGBoost</strong></td>
+            <td><strong>18.38</strong></td>
+            <td><strong>23.13</strong></td>
+            <td><strong>−0.38</strong></td>
+            <td>🏆 Best</td>
+          </tr>
+          <tr>
+            <td>Random Forest</td>
+            <td>21.95</td>
+            <td>26.80</td>
+            <td>−0.85</td>
+            <td></td>
+          </tr>
+          <tr>
+            <td>Hist Gradient Boosting</td>
+            <td>22.72</td>
+            <td>28.14</td>
+            <td>−1.04</td>
+            <td></td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="highlight" style="margin-top: 30px;">
+        <strong>Interpretation:</strong> Negative R² indicates all models perform worse than the mean baseline. This suggests noisy target labels or insufficient feature signal. <strong>Accuracy improvement is a priority.</strong>
+      </div>
+    </div>
+
+    <!-- Slide 8: Learning Curves -->
+    <div class="slide">
+      <h2>Learning Curve Analysis</h2>
+      <h3>Group-Aware RF Learning Curve</h3>
+      <p>Session-level train/validation split with repeated sampling:</p>
+      <ul>
+        <li>Train sessions: 3 → 32</li>
+        <li>5 repeats per sample size</li>
+        <li>Train RMSE: 0.57–1.16 min (low, stable)</li>
+        <li>Validation RMSE: 19.8–27.5 min (high, variable)</li>
+      </ul>
+      <div class="highlight">
+        <strong>Finding:</strong> Large train/validation gap indicates overfitting or weak features. Model memorizes training sessions but fails to generalize.
+      </div>
+      <h3 style="margin-top: 20px;">XGBoost Boosting Rounds</h3>
+      <ul>
+        <li>Both train and validation RMSE converge quickly (by round 50)</li>
+        <li>No clear overfitting pattern in boosting trajectory</li>
+        <li>Suggests the issue is feature-level, not regularization</li>
+      </ul>
+    </div>
+
+    <!-- Slide 9: Residual Analysis -->
+    <div class="slide">
+      <h2>Residual Analysis (Best Model)</h2>
+      <p><strong>XGBoost residuals on 5,734 test samples:</strong></p>
+      <table class="metric-table">
+        <thead>
+          <tr>
+            <th>Statistic</th>
+            <th>Value</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Mean</td>
+            <td>+3.49 min</td>
+          </tr>
+          <tr>
+            <td>Std Dev</td>
+            <td>22.87 min</td>
+          </tr>
+          <tr>
+            <td>Median</td>
+            <td>+6.37 min</td>
+          </tr>
+          <tr>
+            <td>Min</td>
+            <td>−51.33 min (underpredicted)</td>
+          </tr>
+          <tr>
+            <td>Max</td>
+            <td>+56.94 min (overpredicted)</td>
+          </tr>
+        </tbody>
+      </table>
+      <p style="margin-top: 20px; color: #666;">Model tends to <strong>overpredict ETA</strong> (positive bias). Large std dev (22.87) shows high variance in errors — some predictions are very wrong.</p>
+    </div>
+
+    <!-- Slide 10: Next Steps -->
+    <div class="slide">
+      <h2>Next Steps to Improve Accuracy</h2>
+      <h3>Short-term (Feature & Regularization)</h3>
+      <ul>
+        <li><strong>Feature diagnostics:</strong> Compute correlation & importance; identify weak/redundant features</li>
+        <li><strong>Regularization sweep:</strong> Grid-search RF/XGB hyperparameters (max_depth, min_samples_leaf, lambda)</li>
+        <li><strong>Route variant tagging:</strong> Explicitly label morning/evening route variants for finer segment modeling</li>
+      </ul>
+      <h3>Medium-term (Data & Context)</h3>
+      <ul>
+        <li><strong>Collect more sessions:</strong> Expand coverage to rare traffic states and edge cases</li>
+        <li><strong>Add calendar context:</strong> Holiday flags, event days, weekday/weekend patterns</li>
+        <li><strong>Lagged features:</strong> Recent congestion trends (last 2–5 bins) to model queue propagation</li>
+      </ul>
+      <h3>Long-term (Modeling)</h3>
+      <ul>
+        <li><strong>Hierarchical Bayesian ETA:</strong> Produce uncertainty intervals, not point predictions</li>
+        <li><strong>Ensemble stacking:</strong> Combine LightGBM + XGBoost + Time-series models</li>
+        <li><strong>Segment-level models:</strong> Predict per-bin travel time, then sum for full route</li>
+      </ul>
+    </div>
+
+    <!-- Slide 11: Deployment -->
+    <div class="slide">
+      <h2>Model Deployment & Usage</h2>
+      <h3>Live App</h3>
+      <p>Interactive deployment at <code>eta_model_app.html</code>:</p>
+      <ul>
+        <li>Select route (morning/evening) and departure time</li>
+        <li>Click on route polyline to set current location</li>
+        <li>Model predicts remaining ETA in real-time</li>
+        <li>Color-coded route segments show congestion level</li>
+      </ul>
+      <h3>Model Artifact</h3>
+      <p><code style="background:#eee; padding:4px 8px; border-radius:4px;">model_outputs/eta_model.joblib</code> (joblib bundle containing):</p>
+      <ul>
+        <li>Trained XGBoost regressor</li>
+        <li>Feature names & route references</li>
+        <li>Bin size & metadata</li>
+      </ul>
+      <h3>Metrics & Outputs</h3>
+      <p>Full results in <code style="background:#eee; padding:4px 8px; border-radius:4px;">model_outputs/</code>: training tables, learning curves, residuals, accuracy details.</p>
+    </div>
+
+    <!-- Slide 12: Conclusion -->
+    <div class="slide">
+      <h2>Summary</h2>
+      <div class="stats" style="margin-top: 40px;">
+        <div class="stat-box">
+          <div class="stat-label" style="font-size: 16px; margin-bottom: 8px;">Best Model</div>
+          <div class="stat-number" style="font-size: 36px;">XGBoost</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-label" style="font-size: 16px; margin-bottom: 8px;">Best MAE</div>
+          <div class="stat-number" style="font-size: 36px;">18.4 min</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-label" style="font-size: 16px; margin-bottom: 8px;">Samples</div>
+          <div class="stat-number" style="font-size: 36px;">28K+</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-label" style="font-size: 16px; margin-bottom: 8px;">Status</div>
+          <div class="stat-number" style="font-size: 28px;">🚀 Live</div>
+        </div>
+      </div>
+      <div class="highlight" style="margin-top: 40px; text-align: center;">
+        <p><strong>Current Challenge:</strong> Negative R² indicates room for improvement.</p>
+        <p style="margin-top: 10px;"><strong>Path Forward:</strong> Feature engineering, regularization tuning, and more data collection.</p>
+      </div>
+    </div>
+
+    <!-- Controls -->
+    <div class="controls">
+      <button id="prevBtn" onclick="changeSlide(-1)">← Previous</button>
+      <span class="slide-counter"><span id="currentSlide">1</span> / <span id="totalSlides">12</span></span>
+      <button id="nextBtn" onclick="changeSlide(1)">Next →</button>
+    </div>
+  </div>
+
+  <script>
+    let currentSlide = 1;
+    const totalSlides = document.querySelectorAll('.slide').length;
+    document.getElementById('totalSlides').textContent = totalSlides;
+
+    function showSlide(n) {
+      const slides = document.querySelectorAll('.slide');
+      if (n > slides.length) currentSlide = slides.length;
+      if (n < 1) currentSlide = 1;
+      
+      slides.forEach(slide => slide.classList.remove('active'));
+      slides[currentSlide - 1].classList.add('active');
+      
+      document.getElementById('currentSlide').textContent = currentSlide;
+      document.getElementById('prevBtn').disabled = currentSlide === 1;
+      document.getElementById('nextBtn').disabled = currentSlide === totalSlides;
+    }
+
+    function changeSlide(n) {
+      currentSlide += n;
+      showSlide(currentSlide);
+    }
+
+    // Keyboard navigation
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowRight') changeSlide(1);
+      if (e.key === 'ArrowLeft') changeSlide(-1);
+    });
+
+    showSlide(currentSlide);
+  </script>
+</body>
+</html>
