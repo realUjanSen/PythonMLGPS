@@ -10,7 +10,6 @@
 <body>
   <header class="topbar">
     <h1>GPS Session Cleaner</h1>
-    <div class="hint">phpMyAdmin style route inspector</div>
   </header>
 
   <main class="layout">
@@ -19,6 +18,7 @@
         <h2>Session List</h2>
         <div class="toolbar">
           <button id="reloadBtn" type="button">Reload CSV</button>
+          <button id="undoTopBtn" type="button">Undo</button>
           <input id="filePicker" type="file" accept=".csv" multiple>
           <label><input id="showAllToggle" type="checkbox" checked> Show all routes</label>
           <button id="deleteSessionBtn" type="button">Delete selected session</button>
@@ -37,16 +37,7 @@
             <option value="Shuttle">Shuttle</option>
           </select>
         </div>
-        <div class="field-row">
-          <label for="morningVariantSelect">Morning Route Variant</label>
-          <select id="morningVariantSelect">
-            <option value="">Unclassified</option>
-            <option value="v1_best_forced_right_philips">V1 (Best): Chingrihata allowed, forced right at Philips (no Technopolis)</option>
-            <option value="v2_chingri_allowed_technopolis_forced">V2: Chingrihata allowed, Technopolis forced (no Philips right)</option>
-            <option value="v3_forced_left_chingri_right_philips">V3: Forced left at Chingrihata, right at Philips allowed</option>
-            <option value="v4_impossible_forced_left_and_technopolis">V4 (Impossible in practice): forced left + Technopolis forced</option>
-          </select>
-        </div>
+        <!-- Morning Route Variant dropdown removed (variants deprecated) -->
       </section>
 
       <section class="panel">
@@ -72,38 +63,12 @@
           <button id="saveCleanedBtn" type="button">Save cleaned CSV</button>
           <button id="downloadBtn" type="button">Download cleaned CSV</button>
         </div>
-        <p class="small-note">Click or hold-drag on the map in eraser mode to erase points. Hold <strong>Ctrl</strong> while dragging to pan around the map. With "Erase across all visible sessions", one brush pass can clean multiple routes at once.</p>
+        <p class="small-note">Click or hold-drag on the map in eraser mode to erase points. Hold <strong>Ctrl</strong> while dragging to pan around the map. Press <strong>Ctrl+Z</strong> to undo the last erase. With "Erase across all visible sessions", one brush pass can clean multiple routes at once.</p>
       </section>
 
       <section class="panel">
-        <h2>Route Lab</h2>
-        <div class="field-row">
-          <label for="routeVariantSelect">Route Variant</label>
-          <select id="routeVariantSelect">
-            <option value="route1">Route 1: Unforced left, forced right</option>
-            <option value="route2">Route 2: Unforced left, unforced right</option>
-            <option value="route3">Route 3: Forced left, forced right</option>
-          </select>
-        </div>
-        <div class="toolbar">
-          <button id="captureVariantBtn" type="button">Use Selected Session as Variant</button>
-          <button id="cloneBaselineBtn" type="button">Clone Route 2 to Others</button>
-          <button id="resetVariantBtn" type="button">Reset Selected Variant</button>
-        </div>
-        <div class="field-row">
-          <label><input id="showVariantsToggle" type="checkbox" checked> Show route variants</label>
-          <label><input id="waypointEditMode" type="checkbox"> Edit waypoints</label>
-          <label><input id="midpointMode" type="checkbox"> Show midpoint handles</label>
-        </div>
-        <div class="field-row">
-          <label for="snapThreshold">Snap threshold (meters)</label>
-          <input id="snapThreshold" type="number" min="2" max="120" value="18">
-        </div>
-        <div class="toolbar">
-          <button id="snapToVariantBtn" type="button">Snap Selected Session to Variant</button>
-        </div>
-        <div id="routeStats" class="meta">No route variant selected.</div>
-        <p class="small-note">Drag waypoint circles to reshape route. Right-click a waypoint to delete it. Click midpoint handles to insert a new point.</p>
+        <h2>Route Baseline</h2>
+        <div class="meta">The Route Lab has been removed. The cleaner now uses the fixed elastically snapped morning baseline as the reference route.</div>
       </section>
 
       <section class="panel">
