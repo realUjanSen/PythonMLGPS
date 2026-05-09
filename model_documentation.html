@@ -249,9 +249,9 @@
         <p>
           <strong>Impact on ETA Modeling:</strong> Clusters inflate the per-segment sample count at hotspots without adding real speed information, and off-road jumps can distort the velocity computation for affected segments. The elastic snapping algorithm mitigates this downstream, but upstream deduplication and Wi-Fi-bias detection would reduce noise earlier in the pipeline.
         </p>
-        <figure style="margin-top: 12px; border: 1px solid var(--line); border-radius: 8px; padding: 8px; background: #fff; max-width: 400px;">
-          <img class="chart" src="fusedlocationerror.png" alt="Example of Google fused location clustering and off-road bias" style="max-width: 100%; height: auto;">
-          <figcaption><strong>Example:</strong> Multiple overlapping route traces near Army Camp Sector V, Kolkata. The thick green and blue clusters show repeated locks onto a single position (~6 samples), and the tangled off-road paths into building perimeters illustrate the Wi-Fi-induced positional bias. Raw snapping alone cannot undo this fundamental location uncertainty; preprocessing and deduplication are necessary.</figcaption>
+        <figure style="margin-top: 12px; border: 1px solid var(--line); border-radius: 8px; padding: 12px; background: #fff; display: flex; gap: 12px; align-items: flex-start;">
+          <img class="chart" src="fusedlocationerror.png" alt="Example of Google fused location clustering and off-road bias" style="max-width: 350px; height: auto; flex-shrink: 0;">
+          <figcaption style="flex: 1;"><strong>Example:</strong> Multiple overlapping route traces near Army Camp Sector V, Kolkata. The thick green and blue clusters show repeated locks onto a single position (~6 samples), and the tangled off-road paths into building perimeters illustrate the Wi-Fi-induced positional bias. Raw snapping alone cannot undo this fundamental location uncertainty; preprocessing and deduplication are necessary.</figcaption>
         </figure>
       </div>
     </section>
