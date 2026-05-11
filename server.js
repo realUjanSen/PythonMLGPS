@@ -18,9 +18,7 @@ function getSourceFolder(sourceRaw) {
 
 // Serve static files
 app.use(express.static(__dirname));
-// Allow larger JSON payloads for CSV save requests (client may send full CSV text)
-app.use(express.json({ limit: "10mb" }));
-app.use(express.urlencoded({ limit: "10mb", extended: true }));
+app.use(express.json());
 
 function readCsvAsObjects(filePath) {
   if (!fs.existsSync(filePath)) return [];
@@ -76,7 +74,7 @@ app.get("/api/list-csv-files", (req, res) => {
 // Delete a CSV file
 app.get("/api/delete-csv", (req, res) => {
   try {
-    const { folder } = getSourceFolder(req.query.source);
+    const { source, folder } = getSourceFolder(req.query.source);
     const fileName = req.query.file;
     if (!fileName || fileName.includes("..") || fileName.includes("/")) {
       return res.status(400).json({ error: "Invalid file name" });
@@ -89,11 +87,32 @@ app.get("/api/delete-csv", (req, res) => {
       return res.status(400).json({ error: "Invalid file path" });
     }
 
-    if (fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
-      res.json({ success: true, message: `Deleted ${fileName}` });
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: "File not found" });
+    }
+
+    // Delete the raw file
+    fs.unlinkSync(filePath);
+
+    // If deleting from original (raw) folder, also delete the corresponding snapped file
+    if (source === "original") {
+      const stem = fileName.replace(/\.csv$/i, "");
+      const snappedFileName = stem + "_snapped.csv";
+      const snappedPath = path.join(CSV_FOLDERS.snapped, snappedFileName);
+      
+      if (fs.existsSync(snappedPath)) {
+        try {
+          fs.unlinkSync(snappedPath);
+          res.json({ success: true, message: `Deleted ${fileName} and corresponding snapped file` });
+        } catch (err) {
+          console.warn(`Could not delete snapped file ${snappedFileName}:`, err.message);
+          res.json({ success: true, message: `Deleted ${fileName} but could not delete snapped file` });
+        }
+      } else {
+        res.json({ success: true, message: `Deleted ${fileName}` });
+      }
     } else {
-      res.status(404).json({ error: "File not found" });
+      res.json({ success: true, message: `Deleted ${fileName}` });
     }
   } catch (error) {
     console.error("Error deleting file:", error);

@@ -53,6 +53,12 @@ def log_step(message: str, t0: float) -> None:
     print(f"[{elapsed:7.1f}s] {message}", flush=True)
 
 
+def rf_tree_pair_predict(tree, x_train, x_test):
+    x_train_arr = np.asarray(x_train)
+    x_test_arr = np.asarray(x_test)
+    return np.asarray(tree.predict(x_train_arr), dtype=float), np.asarray(tree.predict(x_test_arr), dtype=float)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -70,9 +76,86 @@ def parse_args() -> argparse.Namespace:
         "--skip-resnap",
         action="store_true",
         default=False,
-        help="If set, use existing snapped CSV files in --snapped-out-dir when present and skip re-snapping those sessions.",
+        help="If set, reuse any existing snapped CSV files in --snapped-out-dir instead of recomputing them.",
     )
     return parser.parse_args()
+
+
+def snapped_csv_path_for_session(session: dict, snapped_out_dir: Path) -> Path:
+    stem = Path(session["file_name"]).stem
+    snapped_name = stem + "_snapped.csv"
+    return snapped_out_dir / snapped_name
+
+
+def should_reuse_snapped_csv(session: dict, snapped_path: Path, raw_csv_dir: Path, force_reuse: bool) -> bool:
+    if not snapped_path.exists():
+        return False
+    if force_reuse:
+        return True
+
+    raw_path = raw_csv_dir / session["file_name"]
+    if not raw_path.exists():
+        return True
+
+    try:
+        return snapped_path.stat().st_mtime >= raw_path.stat().st_mtime
+    except OSError:
+        return False
+
+
+def load_snapped_csv_if_reusable(
+    session: dict,
+    ref: RouteReference,
+    csv_dir: Path,
+    snapped_out_dir: Path,
+    bin_meters: float,
+    force_reuse: bool,
+) -> pd.DataFrame | None:
+    snapped_path = snapped_csv_path_for_session(session, snapped_out_dir)
+    if not should_reuse_snapped_csv(session, snapped_path, csv_dir, force_reuse):
+        return None
+
+    try:
+        matched = pd.read_csv(snapped_path)
+    except Exception:
+        return None
+
+    # Normalize older snapped CSV column names if present.
+    if "SnapProgressM" in matched.columns and "progress_m" not in matched.columns:
+        matched = matched.rename(columns={"SnapProgressM": "progress_m", "SnapOffrouteM": "offroute_m"})
+
+    # If bin_idx missing but progress is present, compute it from bin size and reference.
+    if "bin_idx" not in matched.columns and "progress_m" in matched.columns:
+        try:
+            matched["bin_idx"] = np.clip((matched["progress_m"] // bin_meters).astype(int), 0, max(0, ref.n_bins - 1))
+        except Exception:
+            matched["bin_idx"] = 0
+
+    # Ensure speed_kph exists; if not, try to recompute from timestamps and progress.
+    if "speed_kph" not in matched.columns and "Timestamp" in matched.columns and "progress_m" in matched.columns:
+        try:
+            dt_s = pd.to_datetime(matched["Timestamp"]).diff().dt.total_seconds().to_numpy()
+            dp_m = matched["progress_m"].diff().to_numpy()
+            speed_kph = np.full(len(matched), np.nan)
+            valid = (dt_s > 0.5) & (dt_s <= 300) & (dp_m >= 0)
+            speed_kph[valid] = np.clip((dp_m[valid] / dt_s[valid]) * 3.6, 0.5, 90.0)
+            matched["speed_kph"] = speed_kph
+        except Exception:
+            matched["speed_kph"] = np.nan
+
+    # Ensure eta_remaining_min exists (time to end of session).
+    if "eta_remaining_min" not in matched.columns and "Timestamp" in matched.columns:
+        try:
+            matched["Timestamp"] = pd.to_datetime(matched["Timestamp"], errors="coerce")
+            if len(matched) > 0:
+                end_ts = matched["Timestamp"].iloc[-1]
+                matched["eta_remaining_min"] = (end_ts - matched["Timestamp"]).dt.total_seconds() / 60.0
+            else:
+                matched["eta_remaining_min"] = np.nan
+        except Exception:
+            matched["eta_remaining_min"] = np.nan
+
+    return matched
 
 
 def session_id_from_name(file_name: str) -> int | None:
@@ -591,12 +674,14 @@ def train_models(train_df: pd.DataFrame, t0: float) -> tuple[dict, str, pd.DataF
 
     eval_artifacts = {
         "y_test": np.asarray(y_test),
+        "X_test": X_test,
         "predictions": predictions,
         "xgb_history": xgb_history,
         "X_train": X_train,
         "y_train": np.asarray(y_train),
         "sample_weight_train": w_train,
         "groups_train": groups.iloc[train_idx],
+        "models": fitted,
     }
     return fitted, best_name, metrics_df, feature_cols, eval_artifacts
 
@@ -646,6 +731,7 @@ def export_training_plots(metrics_df: pd.DataFrame, eval_artifacts: dict, out_di
     written: list[str] = []
     start_time = time.time()
     progress_count = 0
+    models = eval_artifacts.get("models") or {}
 
     # Model comparison chart.
     fig = plt.figure(figsize=(10, 5))
@@ -713,53 +799,98 @@ def export_training_plots(metrics_df: pd.DataFrame, eval_artifacts: dict, out_di
             progress_count += 1
             print(f"[{time.time() - start_time:6.1f}s] Plots: {progress_count} saved (XGBoost learning)", flush=True)
 
-    # Random Forest learning curve using cross-validated RMSE.
+    # Hist Gradient Boosting training progress using staged predictions.
     X_train = eval_artifacts.get("X_train")
+    X_test = eval_artifacts.get("X_test")
     y_train = np.asarray(eval_artifacts.get("y_train", []), dtype=float)
-    if X_train is not None and y_train.size >= 20:
+    if X_train is not None and X_test is not None and y_train.size >= 20 and y_test.size > 0:
         try:
-            # Use fewer trees and avoid parallel workers here to prevent nested
-            # parallelism with `learning_curve` which can spawn its own workers.
-            rf_curve_model = RandomForestRegressor(
-                n_estimators=100,
-                random_state=42,
-                n_jobs=1,
-                min_samples_leaf=5,
-            )
-            cv_folds = 5 if y_train.size >= 100 else 3
-            # Run learning_curve in a single job to avoid oversubscription
-            # on machines where tree estimators also use threads.
-            print(f"[{time.time() - start_time:6.1f}s] Starting RF learning_curve (this may take a moment)...", flush=True)
-            train_sizes, train_scores, valid_scores = learning_curve(
-                estimator=rf_curve_model,
-                X=X_train,
-                y=y_train,
-                train_sizes=np.linspace(0.2, 1.0, 6),
-                cv=cv_folds,
-                scoring="neg_root_mean_squared_error",
-                n_jobs=1,
-                shuffle=True,
-                random_state=42,
-            )
-            print(f"[{time.time() - start_time:6.1f}s] Finished RF learning_curve", flush=True)
-            train_rmse = -np.mean(train_scores, axis=1)
-            valid_rmse = -np.mean(valid_scores, axis=1)
+            hist_model = models.get("hist_gradient_boosting")
+            if hist_model is None:
+                raise RuntimeError("HistGradientBoostingRegressor model missing")
 
-            fig = plt.figure(figsize=(8, 4))
+            print(f"[{time.time() - start_time:6.1f}s] Building HistGB training-progress curve...", flush=True)
+            train_curve = hist_model.staged_predict(X_train)
+            valid_curve = hist_model.staged_predict(X_test)
+            total_iters = int(getattr(hist_model, "n_iter_", 0) or 0)
+            sample_every = 1 if total_iters <= 60 else max(1, total_iters // 30)
+
+            iterations = []
+            train_rmse = []
+            valid_rmse = []
+            for iteration, (train_pred, valid_pred) in enumerate(zip(train_curve, valid_curve), start=1):
+                if iteration == 1 or iteration % sample_every == 0 or iteration == total_iters:
+                    iterations.append(iteration)
+                    train_rmse.append(float(np.sqrt(mean_squared_error(y_train, train_pred))))
+                    valid_rmse.append(float(np.sqrt(mean_squared_error(y_test, valid_pred))))
+
+            fig = plt.figure(figsize=(9, 4.5))
             ax = fig.add_subplot(1, 1, 1)
-            ax.plot(train_sizes, train_rmse, marker="o", label="Train RMSE", linewidth=1.5)
-            ax.plot(train_sizes, valid_rmse, marker="o", label="Validation RMSE", linewidth=1.5)
-            ax.set_title("Random Forest Learning Curve", fontsize=11)
-            ax.set_xlabel("Training Samples", fontsize=10)
-            ax.set_ylabel("RMSE", fontsize=10)
+            ax.plot(iterations, train_rmse, marker="o", label="Train RMSE", linewidth=1.5)
+            ax.plot(iterations, valid_rmse, marker="o", label="Validation RMSE", linewidth=1.5)
+            ax.set_title("Hist Gradient Boosting Validation RMSE During Training", fontsize=11)
+            ax.set_xlabel("Boosting Round", fontsize=10)
+            ax.set_ylabel("RMSE (minutes)", fontsize=10)
             ax.legend(fontsize=9)
             fig.tight_layout()
-            path = out_dir / "random_forest_learning_curve.png"
-            fig.savefig(path, dpi=96, quality=85)
+            path = out_dir / "hist_gradient_boosting_learning_curve.png"
+            fig.savefig(path, dpi=96)
             plt.close(fig)
             written.append(path.as_posix())
             progress_count += 1
-            print(f"[{time.time() - start_time:6.1f}s] Plots: {progress_count} saved (RF learning)", flush=True)
+            print(f"[{time.time() - start_time:6.1f}s] Plots: {progress_count} saved (HistGB progress)", flush=True)
+        except Exception:
+            pass
+
+    # Random Forest training progress using partial tree ensembles.
+    if X_train is not None and X_test is not None and y_train.size >= 20 and y_test.size > 0:
+        try:
+            rf_model = models.get("random_forest")
+            if rf_model is None:
+                raise RuntimeError("RandomForestRegressor model missing")
+
+            tree_count = len(getattr(rf_model, "estimators_", []))
+            if tree_count < 2:
+                raise RuntimeError("RandomForestRegressor has too few trees for a progress curve")
+
+            tree_points = np.unique(np.round(np.linspace(1, tree_count, 12)).astype(int))
+            print(f"[{time.time() - start_time:6.1f}s] Building RF training-progress curve with {tree_count} trees...", flush=True)
+
+            tree_preds = joblib.Parallel(n_jobs=-1, prefer="threads")(
+                joblib.delayed(rf_tree_pair_predict)(tree, X_train, X_test)
+                for tree in rf_model.estimators_
+            )
+            train_tree_preds = np.stack([pair[0] for pair in tree_preds], axis=0)
+            valid_tree_preds = np.stack([pair[1] for pair in tree_preds], axis=0)
+            train_cumsum = np.cumsum(train_tree_preds, axis=0)
+            valid_cumsum = np.cumsum(valid_tree_preds, axis=0)
+
+            tree_counts = []
+            train_rmse = []
+            valid_rmse = []
+            for count in tree_points:
+                idx = int(count) - 1
+                train_pred = train_cumsum[idx] / float(count)
+                valid_pred = valid_cumsum[idx] / float(count)
+                tree_counts.append(int(count))
+                train_rmse.append(float(np.sqrt(mean_squared_error(y_train, train_pred))))
+                valid_rmse.append(float(np.sqrt(mean_squared_error(y_test, valid_pred))))
+
+            fig = plt.figure(figsize=(9, 4.5))
+            ax = fig.add_subplot(1, 1, 1)
+            ax.plot(tree_counts, train_rmse, marker="o", label="Train RMSE", linewidth=1.5)
+            ax.plot(tree_counts, valid_rmse, marker="o", label="Validation RMSE", linewidth=1.5)
+            ax.set_title("Random Forest Validation RMSE as Trees Are Added", fontsize=11)
+            ax.set_xlabel("Number of Trees", fontsize=10)
+            ax.set_ylabel("RMSE (minutes)", fontsize=10)
+            ax.legend(fontsize=9)
+            fig.tight_layout()
+            path = out_dir / "random_forest_learning_curve.png"
+            fig.savefig(path, dpi=96)
+            plt.close(fig)
+            written.append(path.as_posix())
+            progress_count += 1
+            print(f"[{time.time() - start_time:6.1f}s] Plots: {progress_count} saved (RF progress)", flush=True)
         except Exception:
             pass
 
@@ -795,9 +926,8 @@ def export_training_plots(metrics_df: pd.DataFrame, eval_artifacts: dict, out_di
                     y_tr = np.asarray(eval_artifacts.get("y_train"))[mask]
                     X_val = X_train[~mask]
                     y_val = np.asarray(eval_artifacts.get("y_train"))[~mask]
-                    # Keep single-threaded here to avoid nested parallelism and
-                    # reduce tree count for quicker diagnostics.
-                    model = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=1, min_samples_leaf=5)
+                    # Use all cores per fit for group-aware diagnostics.
+                    model = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1, min_samples_leaf=5)
                     model.fit(X_tr, y_tr)
                     t_pred = model.predict(X_tr)
                     v_pred = model.predict(X_val)
@@ -825,7 +955,7 @@ def export_training_plots(metrics_df: pd.DataFrame, eval_artifacts: dict, out_di
             ax.legend(fontsize=9)
             fig.tight_layout()
             path = out_dir / 'rf_group_learning_curve.png'
-            fig.savefig(path, dpi=96, quality=85)
+            fig.savefig(path, dpi=96)
             plt.close(fig)
             written.append(path.as_posix())
             progress_count += 1
@@ -1015,54 +1145,14 @@ def main() -> None:
     for i, session in enumerate(sessions, start=1):
         route_type = session["route_type"]
         ref = ref_map[route_type]
-        # If requested, and a snapped CSV already exists for this session, load it and skip re-snapping.
-        matched = None
-        if args.skip_resnap:
-            try:
-                snapped_out_dir.mkdir(parents=True, exist_ok=True)
-            except Exception:
-                pass
-            # exported snapped filename convention: original_stem + "_snapped.csv"
-            orig = Path(session["file_name"]).name
-            stem = Path(orig).stem
-            snapped_name = stem + "_snapped.csv"
-            snapped_path = snapped_out_dir / snapped_name
-            if snapped_path.exists():
-                try:
-                    matched = pd.read_csv(snapped_path)
-                    # Normalize older snapped CSV column names if present
-                    if "SnapProgressM" in matched.columns and "progress_m" not in matched.columns:
-                        matched = matched.rename(columns={"SnapProgressM": "progress_m", "SnapOffrouteM": "offroute_m"})
-                    # If bin_idx missing but progress is present, compute it from bin size and reference
-                    if "bin_idx" not in matched.columns and "progress_m" in matched.columns:
-                        try:
-                            matched["bin_idx"] = np.clip((matched["progress_m"] // args.bin_meters).astype(int), 0, max(0, ref.n_bins - 1))
-                        except Exception:
-                            matched["bin_idx"] = 0
-                    # Ensure speed_kph exists; if not, try to recompute from timestamps and progress
-                    if "speed_kph" not in matched.columns and "Timestamp" in matched.columns and "progress_m" in matched.columns:
-                        try:
-                            dt_s = pd.to_datetime(matched["Timestamp"]).diff().dt.total_seconds().to_numpy()
-                            dp_m = matched["progress_m"].diff().to_numpy()
-                            speed_kph = np.full(len(matched), np.nan)
-                            valid = (dt_s > 0.5) & (dt_s <= 300) & (dp_m >= 0)
-                            speed_kph[valid] = np.clip((dp_m[valid] / dt_s[valid]) * 3.6, 0.5, 90.0)
-                            matched["speed_kph"] = speed_kph
-                        except Exception:
-                            matched["speed_kph"] = np.nan
-                    # Ensure eta_remaining_min exists (time to end of session)
-                    if "eta_remaining_min" not in matched.columns and "Timestamp" in matched.columns:
-                        try:
-                            matched["Timestamp"] = pd.to_datetime(matched["Timestamp"], errors="coerce")
-                            if len(matched) > 0:
-                                end_ts = matched["Timestamp"].iloc[-1]
-                                matched["eta_remaining_min"] = (end_ts - matched["Timestamp"]).dt.total_seconds() / 60.0
-                            else:
-                                matched["eta_remaining_min"] = np.nan
-                        except Exception:
-                            matched["eta_remaining_min"] = np.nan
-                except Exception:
-                    matched = None
+        matched = load_snapped_csv_if_reusable(
+            session=session,
+            ref=ref,
+            csv_dir=csv_dir,
+            snapped_out_dir=snapped_out_dir,
+            bin_meters=args.bin_meters,
+            force_reuse=args.skip_resnap,
+        )
 
         if matched is None:
             matched = match_session_to_reference(session, ref, args.bin_meters)

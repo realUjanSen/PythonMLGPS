@@ -46,8 +46,7 @@ const state = {
   deletedSessionIds: new Set(),
   routeVariants: createDefaultRouteVariants(),
   selectedVariantKey: "route2",
-  // Variants deprecated — don't render variant polylines by default
-  showVariants: false,
+  showVariants: true,
   waypointEditMode: false,
   midpointMode: false,
   showTraffic: true,
@@ -220,12 +219,14 @@ function saveClass(fileName, value) {
 }
 
 function getSavedMorningVariant(fileName) {
-  // Persistent morning-variant storage removed — always return empty variant
-  return "";
+  const map = JSON.parse(localStorage.getItem("sessionMorningVariants") || "{}");
+  return map[fileName] || "";
 }
 
 function saveMorningVariant(fileName, value) {
-  // No-op: disabling persistent morning variant saves
+  const map = JSON.parse(localStorage.getItem("sessionMorningVariants") || "{}");
+  map[fileName] = value;
+  localStorage.setItem("sessionMorningVariants", JSON.stringify(map));
 }
 
 function getMorningVariantLabel(value) {
@@ -299,12 +300,22 @@ function getSelectedSession() {
 }
 
 function saveRouteVariantsToStorage() {
-  // No-op: persistent route variant storage removed
+  const toStore = {};
+  ROUTE_VARIANT_KEYS.forEach((key) => {
+    toStore[key] = state.routeVariants[key].points;
+  });
+  localStorage.setItem("routeVariantsV1", JSON.stringify(toStore));
 }
 
 function loadRouteVariantsFromStorage() {
-  // Initialize in-memory defaults for route variants (no persistent storage)
-  state.routeVariants = createDefaultRouteVariants();
+  const defaults = createDefaultRouteVariants();
+  
+  // Clear old Cityflo route variant data on load
+  localStorage.removeItem("routeVariantsV0");
+  localStorage.removeItem("routeVariantsV1");
+  
+  // Start fresh - no pre-loaded variants
+  state.routeVariants = defaults;
 }
 
 function getSegments(session) {
@@ -340,12 +351,12 @@ function renderMeta() {
   const morningVariantSelect = $("morningVariantSelect");
   const session = getSelectedSession();
 
-  if (!meta || !classSelect) return;
+  if (!meta || !classSelect || !morningVariantSelect) return;
 
   if (!session) {
     meta.textContent = "No session selected.";
     classSelect.value = "";
-    if (morningVariantSelect) morningVariantSelect.value = "";
+    morningVariantSelect.value = "";
     return;
   }
 
@@ -366,7 +377,7 @@ function renderMeta() {
   ].join("");
 
   classSelect.value = session.classLabel || "";
-  if (morningVariantSelect) morningVariantSelect.value = session.morningVariant || "";
+  morningVariantSelect.value = session.morningVariant || "";
 }
 
 function clearMapLayers() {
@@ -1456,21 +1467,9 @@ async function loadSessions() {
   const CSV_FILES = await getCsvFileList();
   const skipped = [];
 
-  for (const entry of CSV_FILES) {
-    const fileName = typeof entry === "string"
-      ? entry
-      : (entry && typeof entry.fileName === "string" ? entry.fileName : "");
-    const urlPath = typeof entry === "string"
-      ? `csv/${entry}`
-      : (entry && typeof entry.urlPath === "string" ? entry.urlPath : `csv/${fileName}`);
-
-    if (!fileName) {
-      skipped.push(String(entry));
-      continue;
-    }
-
+  for (const fileName of CSV_FILES) {
     try {
-      const response = await fetch(urlPath);
+      const response = await fetch(`csv/${fileName}`);
       if (!response.ok) {
         skipped.push(fileName);
         continue;
