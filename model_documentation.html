@@ -281,8 +281,12 @@
       </div>
       <div class="grid" style="margin-top:10px;">
         <div class="card">
-          <h3>Random Forest Learning Curve</h3>
-          <img class="chart" src="model_outputs/random_forest_learning_curve.png" alt="Random Forest learning curve">
+          <h3>Hist Gradient Boosting Training Progress</h3>
+          <img class="chart" src="model_outputs/hist_gradient_boosting_learning_curve.png" alt="Hist Gradient Boosting validation RMSE during training">
+        </div>
+        <div class="card">
+          <h3>Random Forest Training Progress</h3>
+          <img class="chart" src="model_outputs/random_forest_learning_curve.png" alt="Random Forest validation RMSE as trees are added">
         </div>
         <div class="card">
           <h3>XGBoost Learning Curve</h3>
@@ -360,12 +364,12 @@
       <div class="card small">
         <ul>
           <li>Route references: morning=43, evening=35</li>
-          <li>Bin size: 60 meters</li>
+          <li>Bin size: 120 meters</li>
           <li>Group-aware split by session ID</li>
           <li>Features: route type, vehicle class, time-of-day, weekday, route progress, off-route distance, local/global speed context, support count</li>
           <li>Speed feature note: model uses computed speed from snapped progress over time (distance/time), not device satellite speed field.</li>
           <li>Target: ETA remaining minutes</li>
-          <li>Training command used: <code>C:/Python313/python.exe train_eta_model.py --bin-meters 60 --skip-resnap</code></li>
+          <li>Training command used: <code>C:/Python313/python.exe train_eta_model.py --skip-resnap</code></li>
         </ul>
         <div id="trainingParamsBox" class="small">Loading latest training metrics...</div>
       </div>
@@ -374,15 +378,15 @@
     <section>
       <h2>7) Session-Aware Ensemble: General + Specific Accuracy</h2>
       <div class="card small">
-        <p><b>Problem:</b> A single global model trained on mixed sessions achieves <b>R² = 0.29 on baseline sessions</b> (good) but <b>R² = -0.52 on unseen sessions</b> (bad). This gap reveals <b>session-level domain shift</b>: each session has its own speed patterns, congestion signature, and traffic conditions.</p>
+        <p id="sessionAwareProblem"><b>Problem:</b> Loading latest cross-session vs baseline behavior...</p>
         <p><b>Solution:</b> <b>Session-aware ensemble</b> blends two sources of truth:</p>
         <ul>
-          <li><b>General Accuracy</b> = XGBoost + local profile predictions (70% weight). Captures broad route patterns learned from all 34 sessions.</li>
+          <li id="sessionAwareGeneral"><b>General Accuracy</b> = latest best global model + local profile predictions (70% weight).</li>
           <li><b>Specific Accuracy</b> = per-session baseline ETA (30% weight). Captures this particular session's typical completion time.</li>
         </ul>
         <p><b>Example (Session 43, Morning, 50% Progress at 08:00):</b></p>
         <div style="background:#f9fbff; padding:8px; border-radius:6px; margin:8px 0; font-family:monospace; font-size:11px;">
-          <div>Model predicts: 30.11 min  <span style="color:#888;">&larr; General (XGBoost alone)</span></div>
+          <div>Model predicts: 30.11 min  <span style="color:#888;">&larr; General (current best global model alone)</span></div>
           <div>Local profile: 38.09 min  <span style="color:#888;">&larr; Route segment 50%→100%</span></div>
           <div style="margin:4px 0;">Model + profile blend: 0.55×30.11 + 0.45×38.09 = <b>33.75 min</b></div>
           <div style="margin:4px 0; padding:4px; background:#e8f5e9; border-left:2px solid #4caf50;">
@@ -400,72 +404,11 @@
 
     <section>
       <h2>8) Model Metrics and Accuracy Trade-offs</h2>
-      <div class="card small">
-        <p><b>Cross-Session R² (grouped by session_id):</b></p>
-        <table style="width:100%; border-collapse:collapse; margin:8px 0;">
-          <tr style="background:#f0f4f8; border-bottom:1px solid #d7e1ee;">
-            <th style="padding:6px; text-align:left;">Model</th>
-            <th style="padding:6px; text-align:center;">MAE (min)</th>
-            <th style="padding:6px; text-align:center;">RMSE (min)</th>
-            <th style="padding:6px; text-align:center; color:#d32f2f;"><b>R² (Cross-Session)</b></th>
-          </tr>
-          <tr style="border-bottom:1px solid #d7e1ee;">
-            <td style="padding:6px;"><b>XGBoost (Best)</b></td>
-            <td style="padding:6px; text-align:center;">19.61</td>
-            <td style="padding:6px; text-align:center;">24.29</td>
-            <td style="padding:6px; text-align:center; background:#ffebee;"><b>-0.52</b></td>
-          </tr>
-          <tr style="border-bottom:1px solid #d7e1ee;">
-            <td style="padding:6px;">Hist Gradient Boosting</td>
-            <td style="padding:6px; text-align:center;">22.82</td>
-            <td style="padding:6px; text-align:center;">28.33</td>
-            <td style="padding:6px; text-align:center; background:#ffebee;"><b>-1.07</b></td>
-          </tr>
-          <tr style="border-bottom:1px solid #d7e1ee;">
-            <td style="padding:6px;">Random Forest</td>
-            <td style="padding:6px; text-align:center;">26.18</td>
-            <td style="padding:6px; text-align:center;">31.87</td>
-            <td style="padding:6px; text-align:center; background:#ffebee;"><b>-1.62</b></td>
-          </tr>
-        </table>
-        <p><b>Baseline Sessions Only R² (no domain shift):</b></p>
-        <table style="width:100%; border-collapse:collapse; margin:8px 0;">
-          <tr style="background:#f0f4f8; border-bottom:1px solid #d7e1ee;">
-            <th style="padding:6px; text-align:left;">Model</th>
-            <th style="padding:6px; text-align:center;">MAE (min)</th>
-            <th style="padding:6px; text-align:center;">RMSE (min)</th>
-            <th style="padding:6px; text-align:center; color:#2e7d32;"><b>R² (Baseline Only)</b></th>
-          </tr>
-          <tr style="border-bottom:1px solid #d7e1ee;">
-            <td style="padding:6px;"><b>XGBoost</b></td>
-            <td style="padding:6px; text-align:center;">11.73</td>
-            <td style="padding:6px; text-align:center;">17.23</td>
-            <td style="padding:6px; text-align:center; background:#e8f5e9;"><b>+0.29</b> ✓</td>
-          </tr>
-          <tr style="border-bottom:1px solid #d7e1ee;">
-            <td style="padding:6px;">Hist Gradient Boosting</td>
-            <td style="padding:6px; text-align:center;">14.46</td>
-            <td style="padding:6px; text-align:center;">22.91</td>
-            <td style="padding:6px; text-align:center; background:#ffebee;"><b>-0.26</b></td>
-          </tr>
-          <tr>
-            <td style="padding:6px;">Random Forest</td>
-            <td style="padding:6px; text-align:center;">21.64</td>
-            <td style="padding:6px; text-align:center;">32.13</td>
-            <td style="padding:6px; text-align:center; background:#ffebee;"><b>-1.48</b></td>
-          </tr>
-        </table>
-        <p><b>Interpretation:</b></p>
-        <ul>
-          <li><b>R² = -0.52 (cross-session):</b> Model performs worse than predicting the mean ETA on unseen sessions. Indicates high session-level heterogeneity.</li>
-          <li><b>R² = +0.29 (baseline only):</b> On familiar sessions, XGBoost explains 29% of variance. Session-aware blending (30% baseline weight) helps adapt predictions to known sessions.</li>
-          <li><b>Gap of ~0.81:</b> The large R² swing shows that <b>session identity is a hidden variable</b>. Future improvements: collect more diverse sessions or add explicit session/driver features.</li>
-        </ul>
-      </div>
+      <div id="accuracyTradeoffBox" class="card small">Loading accuracy trade-off analysis...</div>
     </section>
 
     <section>
-      <h2>11) Deployed Usage</h2>
+      <h2>9) Deployed Usage</h2>
       <div class="card small">
         <p>Use the deployed app at <a href="eta_model_app.html">eta_model_app.html</a>.</p>
         <ol>
@@ -479,16 +422,10 @@
     </section>
 
     <section>
-      <h2>12) Limitations and Edge Cases</h2>
+      <h2>10) Limitations and Edge Cases</h2>
       <div class="card small">
-        <ul>
-          <li><b>Cross-session test (grouped by session_id):</b> XGBoost shows R² ≈ <b>-0.52</b> (worse than mean baseline).</li>
-          <li><b>Baseline sessions only:</b> XGBoost shows R² ≈ <b>0.29</b> (positive, indicates domain shift). This gap reveals that models overfit to session-specific patterns and generalize poorly to new sessions.</li>
-          <li>Small dataset size and route coverage gaps reduce model confidence across rare traffic states.</li>
-          <li>Trip context is still under-specified: event spikes, weather effects, and incident-level disruptions are not yet represented.</li>
-          <li>Snapped baselines improve consistency but can compress true detour behavior and lane-level deviations.</li>
-          <li>Morning/evening behavior drift exists; a single global model can blur pattern differences when data is limited.</li>
-          <li>Sampling bias can occur because sessions are concentrated around specific days and departure windows.</li>
+        <ul id="limitationsList">
+          <li>Loading latest limitations from current training summary...</li>
         </ul>
       </div>
       <div class="card small" style="margin-top:10px;">
@@ -503,7 +440,7 @@
     </section>
 
     <section>
-      <h2>13) Expected Improvement with More Data + Bayesian ETA Modeling</h2>
+      <h2>11) Expected Improvement with More Data + Bayesian ETA Modeling</h2>
       <div class="card small">
         <p>
           As more sessions are collected, the model should improve because each route segment is observed under more traffic states and departure times.
@@ -1055,6 +992,123 @@
       return items.map((x) => `<span class=\"pill\">${String(x)}</span>`).join("");
     }
 
+    function modelDisplayName(modelKey) {
+      const key = String(modelKey || '').toLowerCase();
+      if (key === 'hist_gradient_boosting') return 'Hist Gradient Boosting';
+      if (key === 'xgboost') return 'XGBoost';
+      if (key === 'random_forest') return 'Random Forest';
+      return String(modelKey || 'unknown');
+    }
+
+    function signedFixed(value, digits = 2) {
+      const n = Number(value);
+      if (!Number.isFinite(n)) return 'N/A';
+      return `${n >= 0 ? '+' : ''}${n.toFixed(digits)}`;
+    }
+
+    function fixed(value, digits = 2) {
+      const n = Number(value);
+      if (!Number.isFinite(n)) return 'N/A';
+      return n.toFixed(digits);
+    }
+
+    function getBestByR2(rows) {
+      const list = Array.isArray(rows) ? rows.filter((r) => Number.isFinite(Number(r.r2))) : [];
+      if (list.length === 0) return null;
+      return [...list].sort((a, b) => Number(b.r2) - Number(a.r2))[0];
+    }
+
+    function getWorstByR2(rows) {
+      const list = Array.isArray(rows) ? rows.filter((r) => Number.isFinite(Number(r.r2))) : [];
+      if (list.length === 0) return null;
+      return [...list].sort((a, b) => Number(a.r2) - Number(b.r2))[0];
+    }
+
+    function buildTradeoffTable(rows, bestRow, title, r2LabelColor) {
+      const body = (Array.isArray(rows) ? rows : []).map((m) => {
+        const isBest = bestRow && String(bestRow.model) === String(m.model);
+        const r2Value = Number(m.r2);
+        const r2Bg = Number.isFinite(r2Value) && r2Value >= 0 ? '#e8f5e9' : '#ffebee';
+        const modelLabel = `${modelDisplayName(m.model)}${isBest ? ' (Best)' : ''}`;
+        return `
+          <tr style="border-bottom:1px solid #d7e1ee;">
+            <td style="padding:6px; ${isBest ? 'font-weight:700;' : ''}">${modelLabel}</td>
+            <td style="padding:6px; text-align:center;">${fixed(m.mae_min, 2)}</td>
+            <td style="padding:6px; text-align:center;">${fixed(m.rmse_min, 2)}</td>
+            <td style="padding:6px; text-align:center; background:${r2Bg};"><b>${signedFixed(m.r2, 2)}</b></td>
+          </tr>
+        `;
+      }).join('');
+
+      return `
+        <p><b>${title}</b></p>
+        <table style="width:100%; border-collapse:collapse; margin:8px 0;">
+          <tr style="background:#f0f4f8; border-bottom:1px solid #d7e1ee;">
+            <th style="padding:6px; text-align:left;">Model</th>
+            <th style="padding:6px; text-align:center;">MAE (min)</th>
+            <th style="padding:6px; text-align:center;">RMSE (min)</th>
+            <th style="padding:6px; text-align:center; color:${r2LabelColor};"><b>R²</b></th>
+          </tr>
+          ${body}
+        </table>
+      `;
+    }
+
+    function renderDynamicNarrative(summary) {
+      const crossMetrics = Array.isArray(summary.metrics) ? summary.metrics : [];
+      const baselineMetrics = Array.isArray(summary.baseline_test_metrics) ? summary.baseline_test_metrics : [];
+      const bestCross = getBestByR2(crossMetrics);
+      const bestBaseline = getBestByR2(baselineMetrics);
+      const worstCross = getWorstByR2(crossMetrics);
+
+      const problem = document.getElementById('sessionAwareProblem');
+      if (problem && bestCross && bestBaseline) {
+        problem.innerHTML = `<b>Problem:</b> A single global model trained on mixed sessions achieves <b>R² = ${signedFixed(bestBaseline.r2, 2)} on baseline sessions</b> but <b>R² = ${signedFixed(bestCross.r2, 2)} on cross-session tests</b>. This gap reveals <b>session-level domain shift</b>: each session has its own speed patterns, congestion signature, and traffic conditions.`;
+      }
+
+      const general = document.getElementById('sessionAwareGeneral');
+      if (general && bestCross) {
+        general.innerHTML = `<b>General Accuracy</b> = ${modelDisplayName(bestCross.model)} + local profile predictions (70% weight). Captures broad route patterns learned from all ${Number(summary.sessions_used) || 0} sessions.`;
+      }
+
+      const tradeoff = document.getElementById('accuracyTradeoffBox');
+      if (tradeoff) {
+        const crossTable = buildTradeoffTable(crossMetrics, bestCross, 'Cross-Session R² (grouped by session_id):', '#d32f2f');
+        const baselineTable = buildTradeoffTable(baselineMetrics, bestBaseline, 'Baseline Sessions Only R² (no domain shift):', '#2e7d32');
+        const gap = bestCross && bestBaseline ? Number(bestBaseline.r2) - Number(bestCross.r2) : NaN;
+        const interpretation = `
+          <p><b>Interpretation:</b></p>
+          <ul>
+            <li><b>Best cross-session model:</b> ${bestCross ? `${modelDisplayName(bestCross.model)} (R² ${signedFixed(bestCross.r2, 2)})` : 'N/A'} on unseen sessions.</li>
+            <li><b>Best baseline-only model:</b> ${bestBaseline ? `${modelDisplayName(bestBaseline.model)} (R² ${signedFixed(bestBaseline.r2, 2)})` : 'N/A'} on familiar sessions.</li>
+            <li><b>Worst cross-session model:</b> ${worstCross ? `${modelDisplayName(worstCross.model)} (R² ${signedFixed(worstCross.r2, 2)})` : 'N/A'}; this quantifies current generalization risk.</li>
+            <li><b>Domain-shift gap:</b> ${Number.isFinite(gap) ? signedFixed(gap, 2) : 'N/A'} between best baseline and best cross-session performance, indicating session identity still behaves like a hidden variable.</li>
+          </ul>
+        `;
+
+        tradeoff.innerHTML = `${crossTable}${baselineTable}${interpretation}`;
+      }
+
+      const limitationsList = document.getElementById('limitationsList');
+      if (limitationsList) {
+        const bestCrossText = bestCross
+          ? `${modelDisplayName(bestCross.model)} shows R² ${signedFixed(bestCross.r2, 2)} in cross-session tests`
+          : 'Cross-session R² not available';
+        const bestBaseText = bestBaseline
+          ? `${modelDisplayName(bestBaseline.model)} shows R² ${signedFixed(bestBaseline.r2, 2)} on baseline sessions`
+          : 'Baseline-session R² not available';
+        limitationsList.innerHTML = [
+          `<li><b>Cross-session test (grouped by session_id):</b> ${bestCrossText}. Generalization remains sensitive to session-level shifts.</li>`,
+          `<li><b>Baseline sessions only:</b> ${bestBaseText}. The gap versus cross-session performance indicates domain shift and partial overfitting to familiar session patterns.</li>`,
+          '<li>Small dataset size and route coverage gaps reduce model confidence across rare traffic states.</li>',
+          '<li>Trip context is still under-specified: event spikes, weather effects, and incident-level disruptions are not yet represented.</li>',
+          '<li>Snapped baselines improve consistency but can compress true detour behavior and lane-level deviations.</li>',
+          '<li>Morning/evening behavior drift exists; a single global model can blur pattern differences when data is limited.</li>',
+          '<li>Sampling bias can occur because sessions are concentrated around specific days and departure windows.</li>'
+        ].join('');
+      }
+    }
+
     async function loadDocData() {
       const [summary, dataset] = await Promise.all([
         safeJson('/api/model-summary'),
@@ -1065,7 +1119,7 @@
       summaryBox.innerHTML = [
         `<b>Sessions used:</b> ${summary.sessions_used}`,
         `<b>Morning / Evening:</b> ${summary.morning_sessions} / ${summary.evening_sessions}`,
-        `<b>Best model:</b> ${summary.best_model}`,
+        `<b>Best model:</b> ${modelDisplayName(summary.best_model)}`,
         `<b>Morning baseline:</b> ${summary.morning_reference}`,
         `<b>Evening baseline:</b> ${summary.evening_reference}`,
         `<b>API base used:</b> ${activeApiBase || 'unknown'}`
@@ -1088,8 +1142,8 @@
       const hasWeighted = metrics.length > 0 && Object.prototype.hasOwnProperty.call(metrics[0], 'weighted_mae_min');
       const rows = metrics.map((m) =>
         hasWeighted
-          ? `<tr><td>${m.model}</td><td>${Number(m.mae_min).toFixed(3)}</td><td>${Number(m.rmse_min).toFixed(3)}</td><td>${Number(m.weighted_mae_min).toFixed(3)}</td><td>${Number(m.weighted_rmse_min).toFixed(3)}</td><td>${Number(m.weighted_r2).toFixed(3)}</td><td>${Number(m.r2).toFixed(3)}</td></tr>`
-          : `<tr><td>${m.model}</td><td>${Number(m.mae_min).toFixed(3)}</td><td>${Number(m.rmse_min).toFixed(3)}</td><td>${Number(m.r2).toFixed(3)}</td></tr>`
+          ? `<tr><td>${modelDisplayName(m.model)}</td><td>${Number(m.mae_min).toFixed(3)}</td><td>${Number(m.rmse_min).toFixed(3)}</td><td>${Number(m.weighted_mae_min).toFixed(3)}</td><td>${Number(m.weighted_rmse_min).toFixed(3)}</td><td>${Number(m.weighted_r2).toFixed(3)}</td><td>${Number(m.r2).toFixed(3)}</td></tr>`
+          : `<tr><td>${modelDisplayName(m.model)}</td><td>${Number(m.mae_min).toFixed(3)}</td><td>${Number(m.rmse_min).toFixed(3)}</td><td>${Number(m.r2).toFixed(3)}</td></tr>`
       ).join('');
       const metricsHead = hasWeighted
         ? '<thead><tr><th>Model</th><th>MAE (min)</th><th>RMSE (min)</th><th>Weighted MAE (min)</th><th>Weighted RMSE (min)</th><th>Weighted R²</th><th>R²</th></tr></thead>'
@@ -1100,6 +1154,8 @@
           <tbody>${rows}</tbody>
         </table>
       `;
+
+      renderDynamicNarrative(summary);
 
       await loadAndRenderCurve();
 
@@ -1137,8 +1193,8 @@
         const hasWeighted = metrics.length > 0 && Object.prototype.hasOwnProperty.call(metrics[0], 'weighted_mae_min');
         const metricsRows = metrics.map((m) =>
           hasWeighted
-            ? `<tr><td>${m.model}</td><td>${Number(m.mae_min).toFixed(3)}</td><td>${Number(m.rmse_min).toFixed(3)}</td><td>${Number(m.weighted_mae_min).toFixed(3)}</td><td>${Number(m.weighted_rmse_min).toFixed(3)}</td><td>${Number(m.weighted_r2).toFixed(4)}</td><td>${Number(m.r2).toFixed(4)}</td></tr>`
-            : `<tr><td>${m.model}</td><td>${Number(m.mae_min).toFixed(3)}</td><td>${Number(m.rmse_min).toFixed(3)}</td><td>${Number(m.r2).toFixed(4)}</td></tr>`
+            ? `<tr><td>${modelDisplayName(m.model)}</td><td>${Number(m.mae_min).toFixed(3)}</td><td>${Number(m.rmse_min).toFixed(3)}</td><td>${Number(m.weighted_mae_min).toFixed(3)}</td><td>${Number(m.weighted_rmse_min).toFixed(3)}</td><td>${Number(m.weighted_r2).toFixed(4)}</td><td>${Number(m.r2).toFixed(4)}</td></tr>`
+            : `<tr><td>${modelDisplayName(m.model)}</td><td>${Number(m.mae_min).toFixed(3)}</td><td>${Number(m.rmse_min).toFixed(3)}</td><td>${Number(m.r2).toFixed(4)}</td></tr>`
         ).join('');
         const metricsHeader = hasWeighted
           ? '<thead><tr><th>Model</th><th>MAE (min)</th><th>RMSE (min)</th><th>Weighted MAE (min)</th><th>Weighted RMSE (min)</th><th>Weighted R²</th><th>R²</th></tr></thead>'
