@@ -750,7 +750,7 @@ def export_training_plots(metrics_df: pd.DataFrame, eval_artifacts: dict, out_di
     plt.close(fig)
     written.append(path.as_posix())
     progress_count += 1
-    print(f"[{time.time() - start_time:6.1f}s] Plots: {progress_count} saved", flush=True)
+    print(f"[{time.time() - start_time:6.1f}s] Saved plot: model comparison (MAE/RMSE)", flush=True)
 
     # Prediction scatter for each model.
     y_test = np.asarray(eval_artifacts.get("y_test", []), dtype=float)
@@ -775,7 +775,7 @@ def export_training_plots(metrics_df: pd.DataFrame, eval_artifacts: dict, out_di
         plt.close(fig)
         written.append(path.as_posix())
         progress_count += 1
-        print(f"[{time.time() - start_time:6.1f}s] Plots: {progress_count} saved", flush=True)
+        print(f"[{time.time() - start_time:6.1f}s] Saved plot: predicted vs actual scatter", flush=True)
 
     # XGBoost learning curve if available.
     xgb_history = eval_artifacts.get("xgb_history")
@@ -797,7 +797,7 @@ def export_training_plots(metrics_df: pd.DataFrame, eval_artifacts: dict, out_di
             plt.close(fig)
             written.append(path.as_posix())
             progress_count += 1
-            print(f"[{time.time() - start_time:6.1f}s] Plots: {progress_count} saved (XGBoost learning)", flush=True)
+            print(f"[{time.time() - start_time:6.1f}s] Saved plot: XGBoost RMSE by boosting round", flush=True)
 
     # Hist Gradient Boosting training progress using staged predictions.
     X_train = eval_artifacts.get("X_train")
@@ -838,7 +838,7 @@ def export_training_plots(metrics_df: pd.DataFrame, eval_artifacts: dict, out_di
             plt.close(fig)
             written.append(path.as_posix())
             progress_count += 1
-            print(f"[{time.time() - start_time:6.1f}s] Plots: {progress_count} saved (HistGB progress)", flush=True)
+            print(f"[{time.time() - start_time:6.1f}s] Saved plot: Hist Gradient Boosting RMSE during training", flush=True)
         except Exception:
             pass
 
@@ -890,7 +890,7 @@ def export_training_plots(metrics_df: pd.DataFrame, eval_artifacts: dict, out_di
             plt.close(fig)
             written.append(path.as_posix())
             progress_count += 1
-            print(f"[{time.time() - start_time:6.1f}s] Plots: {progress_count} saved (RF progress)", flush=True)
+            print(f"[{time.time() - start_time:6.1f}s] Saved plot: Random Forest RMSE as trees are added", flush=True)
         except Exception:
             pass
 
@@ -959,7 +959,7 @@ def export_training_plots(metrics_df: pd.DataFrame, eval_artifacts: dict, out_di
             plt.close(fig)
             written.append(path.as_posix())
             progress_count += 1
-            print(f"[{time.time() - start_time:6.1f}s] Plots: {progress_count} saved (RF group-aware)", flush=True)
+            print(f"[{time.time() - start_time:6.1f}s] Saved plot: group-aware RF RMSE by session count", flush=True)
 
             # Save raw numbers
             try:
@@ -1253,7 +1253,7 @@ def main() -> None:
         args.morning_ref,
         args.evening_ref,
     )
-    log_step("Evaluated models on baseline sessions", t0)
+    log_step("Evaluated all trained models on the baseline reference sessions", t0)
 
     written_plots = export_training_plots(metrics_df, eval_artifacts, out_dir)
     log_step(f"Exported {len(written_plots)} training plot(s)", t0)
