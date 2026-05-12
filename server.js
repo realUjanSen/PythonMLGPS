@@ -303,9 +303,6 @@ app.get("/api/predict-eta", (req, res) => {
     if (req.query.progressM !== undefined && req.query.progressM !== "") {
       args.push("--progress-m", String(req.query.progressM));
     }
-    if (req.query.vehicleClass) {
-      args.push("--vehicle-class", String(req.query.vehicleClass));
-    }
     if (req.query.weekday !== undefined && req.query.weekday !== "") {
       args.push("--weekday", String(req.query.weekday));
     }

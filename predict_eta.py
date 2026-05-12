@@ -19,7 +19,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lng", type=float, default=None, help="Optional current longitude on/near baseline polyline.")
     parser.add_argument("--dest-lat", type=float, default=None, help="Optional destination latitude on/near baseline polyline.")
     parser.add_argument("--dest-lng", type=float, default=None, help="Optional destination longitude on/near baseline polyline.")
-    parser.add_argument("--vehicle-class", default=None, choices=["Shuttle", "Public Bus"], help="Vehicle class.")
     parser.add_argument("--weekday", type=int, default=None, help="Weekday 0=Mon..6=Sun (defaults to today).")
     parser.add_argument("--offroute-m", type=float, default=0.0, help="Current off-route distance in meters.")
     parser.add_argument("--session-id", type=int, default=None, help="Optional session ID for session-aware blending.")
@@ -104,7 +103,9 @@ def main() -> None:
     minute_of_day = parse_hhmm(args.start_time)
     weekday = int(datetime.now().weekday() if args.weekday is None else args.weekday)
     progress_ratio = resolve_progress_ratio(route_ref, args.progress_ratio, args.progress_m)
-    vehicle_class = args.vehicle_class or default_vehicle_class(args.route)
+    # vehicle_class is deprecated as a trainable feature (was 100% correlated with route_type)
+    # Kept in output for backward compatibility
+    vehicle_class = "Shuttle" if args.route == "morning" else "Public Bus"
 
     profile_path = profiles_dir / f"route_profile_{args.route}.csv"
     if not profile_path.exists():
@@ -132,7 +133,6 @@ def main() -> None:
 
     feature_row = {
         "route_type": 0 if args.route == "morning" else 1,
-        "vehicle_class": 0 if vehicle_class == "Shuttle" else 1,
         "start_minute": minute_of_day,
         "weekday": weekday,
         "progress_ratio": progress_ratio,

@@ -554,7 +554,6 @@ def build_training_table(
             {
                 "session_id": int(row["session_id"]),
                 "route_type": 0 if route_type == "morning" else 1,
-                "vehicle_class": 0 if str(row.get("vehicle_class", "")).lower().startswith("shuttle") else 1,
                 "start_minute": minute_of_day,
                 "weekday": int(start_ts.dayofweek),
                 "progress_ratio": progress_ratio,
@@ -577,7 +576,6 @@ def build_training_table(
 def train_models(train_df: pd.DataFrame, t0: float) -> tuple[dict, str, pd.DataFrame, list[str], dict]:
     feature_cols = [
         "route_type",
-        "vehicle_class",
         "start_minute",
         "weekday",
         "progress_ratio",

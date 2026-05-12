@@ -20,7 +20,6 @@ let trafficColorMode = "banded";
 
 const statusBar = document.getElementById("statusBar");
 const routeSelect = document.getElementById("routeSelect");
-const vehicleSelect = document.getElementById("vehicleSelect");
 const startTimeInput = document.getElementById("startTime");
 const resultBox = document.getElementById("resultBox");
 const chokeList = document.getElementById("chokeList");
@@ -91,7 +90,7 @@ function renderPredictTrace(state) {
   ].join("");
 }
 
-function startPredictTrace({ route, vehicleClass, startTime, hasDestination }) {
+function startPredictTrace({ route, startTime, hasDestination }) {
   if (predictTraceTimer) {
     clearInterval(predictTraceTimer);
     predictTraceTimer = null;
@@ -112,7 +111,7 @@ function startPredictTrace({ route, vehicleClass, startTime, hasDestination }) {
     stage: stages[0],
     progressPct: 2,
     elapsedSec: "0.0",
-    meta: `route=${route}, vehicle=${vehicleClass}, start=${startTime}, destination=${hasDestination ? "yes" : "no"}`
+    meta: `route=${route}, start=${startTime}, destination=${hasDestination ? "yes" : "no"}`
   });
 
   predictTraceTimer = setInterval(() => {
@@ -224,8 +223,7 @@ async function loadProfile() {
   map.fitBounds(bounds.pad(0.08));
   statusBar.textContent = `Loaded ${route} profile with ${profile.length} bins.`;
 
-  // Set default vehicle by route.
-  vehicleSelect.value = route === "morning" ? "Shuttle" : "Public Bus";
+  // Vehicle class is now derived from route (ghost feature removed)
 }
 
 function renderChokes(items) {
@@ -247,9 +245,8 @@ async function predictEta() {
 
   const route = routeSelect.value;
   const startTime = startTimeInput.value || "08:15";
-  const vehicleClass = vehicleSelect.value;
 
-  let urlParams = `route=${encodeURIComponent(route)}&startTime=${encodeURIComponent(startTime)}&vehicleClass=${encodeURIComponent(vehicleClass)}&lat=${encodeURIComponent(selectedPoint.lat)}&lng=${encodeURIComponent(selectedPoint.lng)}`;
+  let urlParams = `route=${encodeURIComponent(route)}&startTime=${encodeURIComponent(startTime)}&lat=${encodeURIComponent(selectedPoint.lat)}&lng=${encodeURIComponent(selectedPoint.lng)}`;
   
   if (destinationPoint) {
     urlParams += `&dest_lat=${encodeURIComponent(destinationPoint.lat)}&dest_lng=${encodeURIComponent(destinationPoint.lng)}`;
@@ -257,7 +254,7 @@ async function predictEta() {
 
   const url = `/api/predict-eta?${urlParams}`;
   resultBox.textContent = "Predicting...";
-  startPredictTrace({ route, vehicleClass, startTime, hasDestination: Boolean(destinationPoint) });
+  startPredictTrace({ route, startTime, hasDestination: Boolean(destinationPoint) });
 
   const res = await fetch(url);
   const data = await res.json();
