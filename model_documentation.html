@@ -328,6 +328,13 @@
       <div class="card" style="margin-top:10px;">
         <div style="display:grid;grid-template-columns:minmax(0,1fr);gap:10px;align-items:end;">
           <div>
+            <label for="curveRouteSelect">Route</label>
+            <select id="curveRouteSelect">
+              <option value="morning" selected>Morning (Home to Office baseline)</option>
+              <option value="evening">Evening (Office to Home baseline)</option>
+            </select>
+          </div>
+          <div>
             <label for="curveStepSelect">Sampling Step</label>
             <select id="curveStepSelect">
               <option value="50" selected>50 meters</option>
@@ -336,7 +343,7 @@
             </select>
           </div>
         </div>
-        <div id="curveMeta" class="small" style="margin-top:8px;">Loading morning baseline curve...</div>
+        <div id="curveMeta" class="small" style="margin-top:8px;">Loading route curve...</div>
         <div class="chart-map-grid" style="margin-top: 8px;">
           <div>
             <div style="position: relative; height: 320px;">
@@ -353,7 +360,7 @@
           </div>
           <div>
             <div id="routeMap" class="route-map"></div>
-            <div id="routeMapStatus" class="route-map-note">Morning baseline only. Click a point on the chart to locate that point on the route.</div>
+            <div id="routeMapStatus" class="route-map-note">Select morning or evening baseline. Click a point on the chart to locate that point on the route.</div>
           </div>
         </div>
       </div>
@@ -973,9 +980,12 @@
     }
 
     async function loadAndRenderCurve() {
-      const route = 'morning';
+      const routeSelect = document.getElementById('curveRouteSelect');
+      const route = routeSelect ? routeSelect.value : 'morning';
       const stepMeters = Number(document.getElementById('curveStepSelect').value || 50);
-      const routeLabel = 'Morning (Home to Office baseline)';
+      const routeLabel = route === 'evening'
+        ? 'Evening (Office to Home baseline)'
+        : 'Morning (Home to Office baseline)';
       const profile = await safeJson(`/api/route-profile?route=${encodeURIComponent(route)}`);
       const curve = buildKmVsEtaCurve(profile, stepMeters);
       if (!curve) {
@@ -1166,6 +1176,13 @@
           updateCurveSelection(currentCurve, Number(e.target.value) || 0, false);
         });
       }
+
+      document.getElementById('curveRouteSelect').addEventListener('change', () => {
+        loadAndRenderCurve().catch((err) => {
+          console.error(err);
+          document.getElementById('curveMeta').textContent = `Failed to render curve: ${err.message}`;
+        });
+      });
 
       document.getElementById('curveStepSelect').addEventListener('change', () => {
         loadAndRenderCurve().catch((err) => {

@@ -18,7 +18,7 @@ function getSourceFolder(sourceRaw) {
 
 // Serve static files
 app.use(express.static(__dirname));
-app.use(express.json());
+app.use(express.json({ limit: "50mb" }));
 
 function readCsvAsObjects(filePath) {
   if (!fs.existsSync(filePath)) return [];
@@ -68,6 +68,30 @@ app.get("/api/list-csv-files", (req, res) => {
   } catch (error) {
     console.error("Error listing CSV files:", error);
     res.status(500).json({ error: "Failed to list CSV files" });
+  }
+});
+
+app.get("/api/health", (req, res) => {
+  try {
+    const csvCount = fs.existsSync(CSV_FOLDERS.original)
+      ? fs.readdirSync(CSV_FOLDERS.original).filter((file) => file.endsWith(".csv")).length
+      : 0;
+    const snappedCount = fs.existsSync(CSV_FOLDERS.snapped)
+      ? fs.readdirSync(CSV_FOLDERS.snapped).filter((file) => file.endsWith(".csv")).length
+      : 0;
+
+    res.json({
+      status: "online",
+      pid: process.pid,
+      killCommand: `Stop-Process -Id ${process.pid} -Force`,
+      uptimeSeconds: Math.round(process.uptime()),
+      csvCount,
+      snappedCount,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("Health check failed:", error);
+    res.status(500).json({ status: "offline" });
   }
 });
 
