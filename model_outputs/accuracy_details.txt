@@ -2,8 +2,8 @@ Note: This is a regression problem (predicting minutes). A confusion matrix is n
 Use MAE, RMSE and R^2 as quality metrics.
 
 Model metrics:
-- hist_gradient_boosting: MAE=20.810 min, RMSE=25.902 min, R2=0.221
-- xgboost: MAE=21.206 min, RMSE=26.911 min, R2=0.159
-- random_forest: MAE=22.019 min, RMSE=28.689 min, R2=0.044
+- xgboost: MAE=13.400 min, RMSE=17.266 min, R2=0.362
+- hist_gradient_boosting: MAE=14.168 min, RMSE=20.795 min, R2=0.074
+- random_forest: MAE=17.577 min, RMSE=23.774 min, R2=-0.210
 
-Residuals (best model = hist_gradient_boosting): mean=-9.461, std=24.112, median=-10.658
+Residuals (best model = xgboost): mean=0.219, std=17.265, median=-1.088
