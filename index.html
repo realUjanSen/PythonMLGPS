@@ -10,7 +10,10 @@
 <body>
   <header class="topbar">
     <h1>GPS Session Cleaner</h1>
-    <div class="hint">phpMyAdmin style route inspector</div>
+    <div class="node-status-shell">
+      <div id="nodeStatus" class="node-status checking">Checking node...</div>
+      <button id="copyKillCmdBtn" class="node-copy-btn" type="button" title="Copy PowerShell kill command" aria-label="Copy PowerShell kill command">Copy</button>
+    </div>
   </header>
 
   <main class="layout">
@@ -57,6 +60,9 @@
           <span id="eraserBadge" class="badge">ERASER OFF</span>
         </div>
         <div class="field-row">
+          <label><input id="pointInspectorMode" type="checkbox"> Enable point inspector</label>
+        </div>
+        <div class="field-row">
           <label for="eraserRadius">Brush size: <span id="radiusValue">25</span>m</label>
           <input id="eraserRadius" type="range" min="2" max="500" value="25">
         </div>
@@ -73,10 +79,11 @@
           <button id="saveCleanedBtn" type="button">Save cleaned CSV</button>
           <button id="downloadBtn" type="button">Download cleaned CSV</button>
         </div>
-        <p class="small-note">Click or hold-drag on the map in eraser mode to erase points. Hold <strong>Ctrl</strong> while dragging to pan around the map. Press <strong>Ctrl+Z</strong> to undo the last erase. With "Erase across all visible sessions", one brush pass can clean multiple routes at once.</p>
+        <div id="pointInspector" class="meta" style="margin-top:8px;">Enable point inspector, then click any visible route line to inspect the nearest GPS point.</div>
+        <p class="small-note">Click or hold-drag on the map in eraser mode to erase points. Use <strong>middle mouse button drag</strong> or <strong>Ctrl+drag</strong> to pan around the map. Press <strong>Ctrl+Z</strong> to undo the last erase. With "Erase across all visible sessions", one brush pass can clean multiple routes at once.</p>
       </section>
 
-      <section class="panel">
+      <section class="panel" style="display: none;">
         <h2>Route Lab</h2>
         <div class="field-row">
           <label for="routeVariantSelect">Route Variant</label>
@@ -135,6 +142,10 @@
 
     <section class="map-wrap">
       <div id="mapModeIndicator" class="map-mode">Normal mode</div>
+      <div class="map-overlay-controls">
+        <button id="eraserOverlayBtn" type="button" class="overlay-mode-btn">Eraser</button>
+        <button id="pointInspectorOverlayBtn" type="button" class="overlay-mode-btn">Inspector</button>
+      </div>
       <div id="map"></div>
     </section>
   </main>

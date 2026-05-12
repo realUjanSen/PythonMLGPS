@@ -58,7 +58,8 @@ const state = {
   eraserLastEraseTime: 0,
   eraserThrottleMs: 350,
   renderDebounceTimer: null,
-  renderDebounceMs: 150
+  renderDebounceMs: 150,
+  pointPopup: null
 };
 
 function $(id) {
@@ -83,6 +84,84 @@ function setStatus(message, isWarn = false) {
   if (!box) return;
   box.textContent = message;
   box.classList.toggle("warn", isWarn);
+}
+
+async function copyTextToClipboard(text) {
+  if (!text) return false;
+
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch (error) {
+    console.warn("Clipboard API copy failed:", error);
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "true");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  document.body.appendChild(textarea);
+  textarea.select();
+
+  try {
+    const ok = document.execCommand("copy");
+    document.body.removeChild(textarea);
+    return ok;
+  } catch (error) {
+    document.body.removeChild(textarea);
+    console.warn("Fallback copy failed:", error);
+    return false;
+  }
+}
+
+async function refreshNodeStatus() {
+  const badge = $("nodeStatus");
+  const copyBtn = $("copyKillCmdBtn");
+  if (!badge) return;
+
+  try {
+    const response = await fetch("/api/health", { cache: "no-store" });
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    const data = await response.json();
+    const pid = Number.isFinite(Number(data.pid)) ? Number(data.pid) : null;
+    const killCommand = data.killCommand || (pid ? `Stop-Process -Id ${pid} -Force` : "taskkill /F /IM node.exe");
+    const pidLabel = pid ?? "unavailable";
+
+    badge.innerHTML = [
+      `<div>Node online · PID ${pidLabel}</div>`,
+      `<div style="font-family: Consolas, 'Courier New', monospace; font-size: 11px; color: inherit; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 280px;">${killCommand}</div>`
+    ].join("");
+    badge.classList.remove("checking", "offline");
+    badge.classList.add("online");
+
+    if (copyBtn) {
+      copyBtn.onclick = async () => {
+        const copied = await copyTextToClipboard(killCommand);
+        copyBtn.textContent = copied ? "Copied" : "Copy";
+        window.setTimeout(() => {
+          copyBtn.textContent = "Copy";
+        }, 1200);
+      };
+    }
+  } catch (error) {
+    badge.innerHTML = "Node offline";
+    badge.classList.remove("checking", "online");
+    badge.classList.add("offline");
+    if (copyBtn) {
+      copyBtn.onclick = null;
+    }
+  }
+}
+
+function startNodeStatusPolling() {
+  refreshNodeStatus();
+  window.setInterval(refreshNodeStatus, 5000);
 }
 
 function safeNum(value) {
@@ -323,6 +402,205 @@ function getSegments(session) {
   return coords.length > 1 ? [coords] : [];
 }
 
+function formatPointValue(value) {
+  if (value === null || value === undefined || value === "") return "N/A";
+  return String(value);
+}
+
+function buildPointInspectorHtml(session, pointRow, clickDistanceMeters) {
+  const headers = Array.isArray(session.headers) ? session.headers : [];
+  const values = Array.isArray(pointRow.cells) ? pointRow.cells : [];
+  const rowMap = new Map();
+
+  headers.forEach((header, index) => {
+    rowMap.set(String(header).trim().toLowerCase(), values[index]);
+  });
+
+  const timestamp = pointRow.timestamp || rowMap.get("timestamp") || rowMap.get("time") || "N/A";
+  const latitude = pointRow.lat ?? rowMap.get("latitude") ?? "N/A";
+  const longitude = pointRow.lng ?? rowMap.get("longitude") ?? "N/A";
+  const accuracy = rowMap.get("accuracy(m)") ?? rowMap.get("accuracy") ?? "N/A";
+  const speed = rowMap.get("speed(m/s)") ?? rowMap.get("speed") ?? "N/A";
+  const bearing = rowMap.get("bearing(°)") ?? rowMap.get("bearing") ?? rowMap.get("bearing(�)") ?? "N/A";
+  const altitude = rowMap.get("altitude(m)") ?? rowMap.get("altitude") ?? "N/A";
+  const satellite = rowMap.get("satellite") ?? rowMap.get("satellite_name") ?? "N/A";
+  const country = rowMap.get("country") ?? rowMap.get("satellite_country") ?? "N/A";
+
+  let html = [
+    "<div class='meta-grid'>",
+    `<div class='meta-item'><span class='label'>File</span><span class='value' title='${session.fileName}'>${session.fileName}</span></div>`,
+    `<div class='meta-item'><span class='label'>Route</span><span class='value'>${detectRouteName(session.fileName)}</span></div>`,
+    `<div class='meta-item'><span class='label'>Point #</span><span class='value'>${pointRow.index + 1}</span></div>`,
+    `<div class='meta-item'><span class='label'>Timestamp</span><span class='value'>${formatPointValue(timestamp)}</span></div>`,
+    `<div class='meta-item'><span class='label'>Latitude</span><span class='value'>${formatPointValue(latitude)}</span></div>`,
+    `<div class='meta-item'><span class='label'>Longitude</span><span class='value'>${formatPointValue(longitude)}</span></div>`,
+    `<div class='meta-item'><span class='label'>Accuracy</span><span class='value'>${formatPointValue(accuracy)}</span></div>`,
+    `<div class='meta-item'><span class='label'>Speed</span><span class='value'>${formatPointValue(speed)}</span></div>`,
+    `<div class='meta-item'><span class='label'>Bearing</span><span class='value'>${formatPointValue(bearing)}</span></div>`,
+    `<div class='meta-item'><span class='label'>Altitude</span><span class='value'>${formatPointValue(altitude)}</span></div>`,
+    `<div class='meta-item'><span class='label'>Satellite</span><span class='value'>${formatPointValue(satellite)}</span></div>`,
+    `<div class='meta-item'><span class='label'>Country</span><span class='value'>${formatPointValue(country)}</span></div>`,
+    `<div class='meta-item'><span class='label'>Click Offset</span><span class='value'>${formatNumber(clickDistanceMeters, 1)} m</span></div>`
+  ].join("");
+
+  // Add all remaining CSV columns not yet shown
+  const shownKeys = new Set(["timestamp", "time", "latitude", "longitude", "accuracy(m)", "accuracy", 
+                              "speed(m/s)", "speed", "bearing(°)", "bearing", "bearing(�)", 
+                              "altitude(m)", "altitude", "satellite", "satellite_name", "country", "satellite_country"]);
+  
+  headers.forEach((header, index) => {
+    const key = String(header).trim().toLowerCase();
+    if (!shownKeys.has(key)) {
+      const value = values[index] ?? "N/A";
+      html += `<div class='meta-item'><span class='label'>${header}</span><span class='value'>${formatPointValue(value)}</span></div>`;
+    }
+  });
+
+  html += "</div>";
+  return html;
+}
+
+function updatePointInspector(session, pointRow, clickLatLng) {
+  const box = $("pointInspector");
+  if (!box) return;
+
+  if (!session || !pointRow) {
+    box.textContent = $("pointInspectorMode")?.checked
+      ? "Click any visible route line to inspect the nearest GPS point."
+      : "Enable point inspector to inspect route points.";
+    return;
+  }
+
+  const clickDistanceMeters = clickLatLng
+    ? haversineMeters([pointRow.lat, pointRow.lng], [clickLatLng.lat, clickLatLng.lng])
+    : 0;
+
+  box.innerHTML = buildPointInspectorHtml(session, pointRow, clickDistanceMeters);
+}
+
+function showPointPopup(latlng, pointRow) {
+  // Remove any existing popup
+  if (state.pointPopup) {
+    state.map.removeLayer(state.pointPopup);
+  }
+
+  if (!latlng || !pointRow) return;
+
+  const pointNum = pointRow.index + 1;
+  const lat = Number(pointRow.lat).toFixed(6);
+  const lng = Number(pointRow.lng).toFixed(6);
+  const popupHtml = `
+    <div style="font-weight: bold; font-size: 14px; margin-bottom: 4px;">Point #${pointNum}</div>
+    <div style="font-size: 12px; font-family: monospace; white-space: nowrap;">
+      ${lat}, ${lng}
+    </div>
+  `;
+
+  const popup = L.popup({ closeButton: false, autoClose: false, className: "point-inspector-popup" })
+    .setLatLng(latlng)
+    .setContent(popupHtml)
+    .addTo(state.map);
+
+  state.pointPopup = popup;
+
+  // Auto-close popup after 5 seconds
+  setTimeout(() => {
+    if (state.pointPopup === popup && state.map) {
+      state.map.removeLayer(popup);
+      state.pointPopup = null;
+    }
+  }, 5000);
+}
+
+function findNearestPointInSession(session, latlng) {
+  if (!session || !Array.isArray(session.pointRows) || session.pointRows.length === 0 || !latlng) return null;
+
+  let bestRow = null;
+  let bestDistance = Infinity;
+
+  session.pointRows.forEach((row) => {
+    const distance = haversineMeters([row.lat, row.lng], [latlng.lat, latlng.lng]);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      bestRow = row;
+    }
+  });
+
+  return bestRow ? { row: bestRow, distanceMeters: bestDistance } : null;
+}
+
+function findNearestVisiblePoint(latlng) {
+  if (!latlng) return null;
+
+  const visibleSessions = state.sessions.filter((session) => state.showAll || session.id === state.selectedId);
+  let bestMatch = null;
+
+  visibleSessions.forEach((session) => {
+    const match = findNearestPointInSession(session, latlng);
+    if (!match) return;
+
+    if (!bestMatch || match.distanceMeters < bestMatch.distanceMeters) {
+      bestMatch = {
+        session,
+        row: match.row,
+        distanceMeters: match.distanceMeters
+      };
+    }
+  });
+
+
+    function syncOverlayModeButtons() {
+      const eraserButton = $("eraserOverlayBtn");
+      const inspectorButton = $("pointInspectorOverlayBtn");
+      const eraserOn = Boolean($("eraserMode")?.checked);
+      const inspectorOn = Boolean($("pointInspectorMode")?.checked);
+
+      if (eraserButton) {
+        eraserButton.textContent = eraserOn ? "Eraser: ON" : "Eraser";
+        eraserButton.classList.toggle("active", eraserOn);
+      }
+
+      if (inspectorButton) {
+        inspectorButton.textContent = inspectorOn ? "Inspector: ON" : "Inspector";
+        inspectorButton.classList.toggle("active", inspectorOn);
+      }
+    }
+  return bestMatch;
+}
+
+function inspectPointAt(latlng, source = "map") {
+  if (!$("pointInspectorMode")?.checked) return null;
+
+  const match = findNearestVisiblePoint(latlng);
+  if (!match) {
+    updatePointInspector(null, null, null);
+    setStatus("Point inspector could not find a visible route point near that click.", true);
+    console.info(`[Point Inspector] No visible point matched (${source}).`);
+    return null;
+  }
+
+  updatePointInspector(match.session, match.row, latlng);
+  setStatus(`Point inspector: ${match.session.fileName} point ${match.row.index + 1} (${formatNumber(match.distanceMeters, 1)} m away).`);
+  console.groupCollapsed(`[Point Inspector] ${match.session.fileName} #${match.row.index + 1}`);
+  console.info("Source:", source);
+  console.info("Distance from click (m):", formatNumber(match.distanceMeters, 2));
+  console.table({
+    fileName: match.session.fileName,
+    pointIndex: match.row.index + 1,
+    timestamp: match.row.timestamp || "",
+    latitude: match.row.lat,
+    longitude: match.row.lng,
+    accuracy: match.row.accuracy,
+    speed: match.row.cells?.[4] ?? null,
+    bearing: match.row.cells?.[5] ?? null,
+    altitude: match.row.cells?.[6] ?? null,
+    satellite: match.row.cells?.[7] ?? null,
+    country: match.row.cells?.[8] ?? null
+  });
+  console.groupEnd();
+  return match;
+}
+
 function renderSessionList() {
   const list = $("sessionList");
   if (!list) return;
@@ -354,7 +632,15 @@ function renderMeta() {
   if (!meta || !classSelect || !morningVariantSelect) return;
 
   if (!session) {
-    meta.textContent = "No session selected.";
+    const morningCount = state.sessions.filter(s => s.fileName.includes("Home_to_Office")).length;
+    const eveningCount = state.sessions.filter(s => s.fileName.includes("Office_to_Home")).length;
+    meta.innerHTML = `
+      <div class='meta-grid'>
+        <div class='meta-item'><span class='label'>Total Sessions</span><span class='value'>${state.sessions.length}</span></div>
+        <div class='meta-item'><span class='label'>Morning</span><span class='value'>${morningCount}</span></div>
+        <div class='meta-item'><span class='label'>Evening</span><span class='value'>${eveningCount}</span></div>
+      </div>
+    `;
     classSelect.value = "";
     morningVariantSelect.value = "";
     return;
@@ -362,19 +648,23 @@ function renderMeta() {
 
   const firstRow = session.rows[0];
   const lastRow = session.rows[session.rows.length - 1];
+  const morningCount = state.sessions.filter(s => s.fileName.includes("Home_to_Office")).length;
+  const eveningCount = state.sessions.filter(s => s.fileName.includes("Office_to_Home")).length;
 
-  meta.innerHTML = [
-    "<table class='meta-table'>",
-    `<tr><td>File</td><td>${session.fileName}</td></tr>`,
-    `<tr><td>Route</td><td>${detectRouteName(session.fileName)}</td></tr>`,
-    `<tr><td>Start Time</td><td>${firstRow?.timestamp || "N/A"}</td></tr>`,
-    `<tr><td>End Time</td><td>${lastRow?.timestamp || "N/A"}</td></tr>`,
-    `<tr><td>Total Rows</td><td>${session.rows.length}</td></tr>`,
-    `<tr><td>GPS Points</td><td>${session.pointRows.length}</td></tr>`,
-    `<tr><td>Morning Variant</td><td>${getMorningVariantLabel(session.morningVariant)}</td></tr>`,
-    `<tr><td>Columns</td><td>${session.headers.join(", ")}</td></tr>`,
-    "</table>"
-  ].join("");
+  meta.innerHTML = `
+    <div class='meta-grid'>
+      <div class='meta-item'><span class='label'>File</span><span class='value' title='${session.fileName}'>${session.fileName.substring(0, 30)}...</span></div>
+      <div class='meta-item'><span class='label'>Route</span><span class='value'>${detectRouteName(session.fileName)}</span></div>
+      <div class='meta-item'><span class='label'>Start</span><span class='value'>${firstRow?.timestamp?.substring(0, 19) || "N/A"}</span></div>
+      <div class='meta-item'><span class='label'>End</span><span class='value'>${lastRow?.timestamp?.substring(0, 19) || "N/A"}</span></div>
+      <div class='meta-item'><span class='label'>Rows</span><span class='value'>${session.rows.length}</span></div>
+      <div class='meta-item'><span class='label'>GPS Pts</span><span class='value'>${session.pointRows.length}</span></div>
+      <div class='meta-item'><span class='label'>Total Sess</span><span class='value'>${state.sessions.length}</span></div>
+      <div class='meta-item'><span class='label'>Morning</span><span class='value'>${morningCount}</span></div>
+      <div class='meta-item'><span class='label'>Evening</span><span class='value'>${eveningCount}</span></div>
+      <div class='meta-item'><span class='label'>Variant</span><span class='value'>${getMorningVariantLabel(session.morningVariant).substring(0, 20)}</span></div>
+    </div>
+  `;
 
   classSelect.value = session.classLabel || "";
   morningVariantSelect.value = session.morningVariant || "";
@@ -1001,6 +1291,7 @@ function eraseAround(latlng, options = {}) {
 
 function updateModeIndicators() {
   const eraserOn = Boolean($("eraserMode")?.checked);
+  const inspectorOn = Boolean($("pointInspectorMode")?.checked);
   const editOn = Boolean($("waypointEditMode")?.checked);
   const midpointOn = Boolean($("midpointMode")?.checked);
 
@@ -1024,6 +1315,10 @@ function updateModeIndicators() {
 
   if (editOn && eraserOn) {
     text += " (map click tools paused)";
+  }
+
+  if (inspectorOn) {
+    text = "Point inspector mode";
   }
 
   if (modeText) {
@@ -1467,8 +1762,9 @@ async function loadSessions() {
   const CSV_FILES = await getCsvFileList();
   const skipped = [];
 
-  for (const fileName of CSV_FILES) {
+  for (const file of CSV_FILES) {
     try {
+      const fileName = typeof file === 'string' ? file : file.fileName;
       const response = await fetch(`csv/${fileName}`);
       if (!response.ok) {
         skipped.push(fileName);
@@ -1481,7 +1777,7 @@ async function loadSessions() {
         state.sessions.push(session);
       }
     } catch {
-      skipped.push(fileName);
+      skipped.push(typeof file === 'string' ? file : file.fileName);
     }
   }
 
@@ -1567,12 +1863,36 @@ function initMap() {
     eraseAround(event.latlng);
   });
 
+  // Point inspector: single map-level handler (more efficient than per-polyline handlers)
+  state.map.on("click", (event) => {
+    if (!$("pointInspectorMode")?.checked) return;
+    if (state.waypointEditMode) return;
+    
+    // Defer expensive lookup to avoid blocking event handlers
+    requestAnimationFrame(() => {
+      const selected = getSelectedSession();
+      if (!selected) return;
+      
+      const nearest = findNearestPointInSession(selected, event.latlng);
+      if (!nearest) return;
+      
+      updatePointInspector(selected, nearest.row, event.latlng);
+      showPointPopup(event.latlng, nearest.row);
+      setStatus(`Inspected point ${nearest.row.index + 1} from ${selected.fileName}.`);
+      console.log(`[Inspector] Point ${nearest.row.index + 1} at ${nearest.distanceMeters.toFixed(1)}m from click`);
+    });
+  });
+
   // Drag-to-erase: mousedown starts erasing and disables map dragging
-  // Ctrl+drag: pan the map normally, don't erase
+  // Ctrl+drag or Middle-click+drag: pan the map normally, don't erase
   state.map.on("mousedown", (event) => {
     if (state.waypointEditMode) return;
     if (!$("eraserMode")?.checked) return;
-    if (event.originalEvent?.ctrlKey) return; // Ctrl+drag: allow map panning
+    
+    // Allow map panning with Ctrl+left-click or middle-click
+    const isMiddleClick = event.originalEvent?.button === 1;
+    const isCtrlClick = event.originalEvent?.ctrlKey;
+    if (isCtrlClick || isMiddleClick) return;
 
     const targets = getEraseTargetSessions();
     if (targets.length === 0) return;
@@ -1640,7 +1960,47 @@ function wireEvents() {
   });
 
   $("eraserRadius")?.addEventListener("input", handleRadiusChange);
-  $("eraserMode")?.addEventListener("change", updateModeIndicators);
+  $("eraserMode")?.addEventListener("change", (e) => {
+    if (e.target.checked && $("pointInspectorMode")?.checked) {
+      $("pointInspectorMode").checked = false;
+      updatePointInspector(null, null, null);
+      console.info("[Point Inspector] Disabled because eraser mode was enabled.");
+    }
+    updateModeIndicators();
+  });
+  $("pointInspectorMode")?.addEventListener("change", (e) => {
+    if (e.target.checked && $("eraserMode")?.checked) {
+      $("eraserMode").checked = false;
+      console.info("[Eraser] Disabled because point inspector was enabled.");
+    }
+    updatePointInspector(null, null, null);
+    if (e.target.checked) {
+      setStatus("Point inspector mode active. Click a visible route to inspect the nearest GPS point.");
+      console.info("[Point Inspector] Mode enabled.");
+    } else {
+      setStatus("Point inspector mode disabled.");
+      console.info("[Point Inspector] Mode disabled.");
+    }
+    updateModeIndicators();
+  });
+
+  $("eraserOverlayBtn")?.addEventListener("click", () => {
+    const eraserCheckbox = $("eraserMode");
+    const nextState = !Boolean(eraserCheckbox?.checked);
+    if (eraserCheckbox) {
+      eraserCheckbox.checked = nextState;
+      eraserCheckbox.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+  });
+
+  $("pointInspectorOverlayBtn")?.addEventListener("click", () => {
+    const inspectorCheckbox = $("pointInspectorMode");
+    const nextState = !Boolean(inspectorCheckbox?.checked);
+    if (inspectorCheckbox) {
+      inspectorCheckbox.checked = nextState;
+      inspectorCheckbox.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+  });
 
   $("classSelect")?.addEventListener("change", (e) => {
     const session = getSelectedSession();
@@ -1780,6 +2140,7 @@ async function bootstrap() {
   wireEvents();
   updateModeIndicators();
   renderRouteStats();
+  startNodeStatusPolling();
   loadSessions();
 }
 
