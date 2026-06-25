@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Fetch only the 2 most recent sessions from phone.
+Fetch sessions from the phone that are newer than the latest exported local session.
 """
 import argparse
 import subprocess
@@ -8,12 +8,16 @@ import sqlite3
 import json
 import csv
 import os
+import re
 import tempfile
 from datetime import datetime
 
 PACKAGE_NAME = "com.example.shuttleestimator"
 DB_BASENAME = "commute_tracker.db"
 CSV_FOLDER = "csv"
+
+
+SESSION_FILE_PATTERN = re.compile(r"^session_(\d+)_")
 
 def run_command(command, capture_output=True, text=True):
     """Run a command as list args for safer quoting."""
@@ -53,6 +57,24 @@ def dump_file_with_run_as(remote_rel_path, local_path, serial=None):
     stderr_text = result.stderr.decode(errors="ignore").strip() if result.stderr else ""
     return result.returncode == 0, stderr_text
 
+
+def get_latest_exported_session_id(csv_folder=CSV_FOLDER):
+    """Return the highest session id already exported locally, or None if none exist."""
+    if not os.path.isdir(csv_folder):
+        return None
+
+    latest_session_id = None
+    for file_name in os.listdir(csv_folder):
+        match = SESSION_FILE_PATTERN.match(file_name)
+        if not match:
+            continue
+
+        session_id = int(match.group(1))
+        if latest_session_id is None or session_id > latest_session_id:
+            latest_session_id = session_id
+
+    return latest_session_id
+
 def pull_database(tmpdir, serial=None):
     """Pull DB with run-as including WAL files."""
     db_path_local = os.path.join(tmpdir, DB_BASENAME)
@@ -74,11 +96,19 @@ def pull_database(tmpdir, serial=None):
     print(f"[+] Database pulled successfully")
     return db_path_local
 
-def export_recent_sessions(conn, limit=2, after_session_id=None):
-    """Export sessions by either recency limit or session-id lower bound."""
+def export_recent_sessions(conn, after_session_id=None):
+    """Export sessions newer than the given session id."""
     cursor = conn.cursor()
 
-    if after_session_id is not None:
+    if after_session_id is None:
+        cursor.execute(
+            """
+            SELECT s.id, s.direction, s.class_label, s.polling_ms, s.start_time, s.end_time
+            FROM sessions s
+            ORDER BY s.id ASC
+            """
+        )
+    else:
         cursor.execute(
             """
             SELECT s.id, s.direction, s.class_label, s.polling_ms, s.start_time, s.end_time
@@ -87,16 +117,6 @@ def export_recent_sessions(conn, limit=2, after_session_id=None):
             ORDER BY s.id ASC
             """,
             (after_session_id,),
-        )
-    else:
-        cursor.execute(
-            """
-            SELECT s.id, s.direction, s.class_label, s.polling_ms, s.start_time, s.end_time
-            FROM sessions s
-            ORDER BY s.start_time DESC
-            LIMIT ?
-            """,
-            (limit,),
         )
     
     sessions = cursor.fetchall()
@@ -136,7 +156,6 @@ def export_recent_sessions(conn, limit=2, after_session_id=None):
 
 def main():
     parser = argparse.ArgumentParser(description="Fetch and export ShuttleEstimator sessions from device")
-    parser.add_argument("--limit", type=int, default=2, help="How many latest sessions to fetch (default: 2)")
     parser.add_argument("--after", type=int, default=None, help="Fetch sessions with id > this value")
     parser.add_argument("--serial", type=str, default=None, help="ADB device serial (optional)")
     args = parser.parse_args()
@@ -165,6 +184,11 @@ def main():
             cursor = conn.cursor()
 
             if args.after is not None:
+                resume_after_session_id = args.after
+            else:
+                resume_after_session_id = get_latest_exported_session_id()
+
+            if resume_after_session_id is not None:
                 cursor.execute(
                     """
                     SELECT s.id, s.direction, s.start_time, COUNT(lp.id) as point_count
@@ -174,12 +198,12 @@ def main():
                     GROUP BY s.id
                     ORDER BY s.id ASC
                     """,
-                    (args.after,),
+                    (resume_after_session_id,),
                 )
                 selected_sessions = cursor.fetchall()
 
                 print("\n" + "="*60)
-                print(f"SESSIONS WITH ID > {args.after}")
+                print(f"SESSIONS WITH ID > {resume_after_session_id}")
                 print("="*60)
 
                 if not selected_sessions:
@@ -194,10 +218,10 @@ def main():
                         )
 
                 print("\n" + "="*60)
-                print(f"Fetching sessions with ID > {args.after}...")
+                print(f"Fetching sessions with ID > {resume_after_session_id}...")
                 print("="*60)
 
-                count = export_recent_sessions(conn, after_session_id=args.after)
+                count = export_recent_sessions(conn, after_session_id=resume_after_session_id)
             else:
                 cursor.execute(
                     """
@@ -205,16 +229,14 @@ def main():
                     FROM sessions s
                     LEFT JOIN location_points lp ON s.id = lp.session_id
                     GROUP BY s.id
-                    ORDER BY s.start_time DESC
-                    LIMIT ?
-                    """,
-                    (args.limit,),
+                    ORDER BY s.id ASC
+                    """
                 )
 
                 selected_sessions = cursor.fetchall()
 
                 print("\n" + "="*60)
-                print(f"LAST {args.limit} SESSIONS IN DATABASE")
+                print("ALL SESSIONS IN DATABASE")
                 print("="*60)
 
                 for row in selected_sessions:
@@ -226,10 +248,10 @@ def main():
                     )
 
                 print("\n" + "="*60)
-                print(f"Fetching these {args.limit} sessions...")
+                print("Fetching all sessions...")
                 print("="*60)
 
-                count = export_recent_sessions(conn, limit=args.limit)
+                count = export_recent_sessions(conn)
             
             print("\n" + "="*60)
             print(f"✅ DONE - {count} sessions exported to csv/")
