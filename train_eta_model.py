@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 import warnings
 import matplotlib
+import concurrent.futures
 
 # Use a non-GUI backend and silence noisy resource tracker warnings on Windows.
 warnings.filterwarnings("ignore", message="resource_tracker:.*")
@@ -75,8 +76,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--skip-resnap",
         action="store_true",
-        default=False,
-        help="If set, reuse any existing snapped CSV files in --snapped-out-dir instead of recomputing them.",
+        default=True,
+        help="Reuse any existing snapped CSV files in --snapped-out-dir by default.",
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=8,
+        help="Number of parallel workers for session snapping (default: 8).",
     )
     return parser.parse_args()
 
@@ -445,6 +452,58 @@ def match_session_to_reference(session: dict, ref: RouteReference, bin_m: float)
     df["eta_remaining_min"] = (end_ts - df["Timestamp"]).dt.total_seconds() / 60.0
 
     return df
+
+
+def match_session_to_reference_worker(payload: tuple) -> tuple[int, pd.DataFrame]:
+    """Worker-friendly wrapper for snapping a session.
+
+    Accepts a payload (session_dict, ref_serialized, bin_m) and returns (session_id, matched_df).
+    This avoids pickling cKDTree by using only the primitive arrays from the reference.
+    """
+    session, ref_serial, bin_m = payload
+    df = session["df"].copy()
+    lat0 = float(ref_serial["lat0"])
+    lng0 = float(ref_serial["lng0"])
+    line_xy = ref_serial["xy"]
+    cum_m = ref_serial["cumulative_m"]
+    total_m = float(ref_serial["total_m"])
+    n_bins = int(ref_serial["n_bins"])
+
+    xy = latlng_to_xy(df["Latitude"].to_numpy(), df["Longitude"].to_numpy(), lat0, lng0)
+
+    raw_progress = np.full(len(df), np.nan, dtype=float)
+    offroute = np.full(len(df), np.nan, dtype=float)
+    for i in range(len(df)):
+        along_m, dist_m, _ = project_point_to_polyline(xy[i], line_xy, cum_m)
+        raw_progress[i] = along_m
+        offroute[i] = dist_m
+
+    progress = np.array(raw_progress, copy=True)
+    valid_mask = np.isfinite(raw_progress) & np.isfinite(offroute)
+    if np.any(valid_mask):
+        progress[valid_mask] = elastic_progress_assignment(
+            raw_progress[valid_mask], offroute[valid_mask], total_m
+        )
+
+    progress = np.nan_to_num(progress, nan=0.0)
+    progress = np.maximum.accumulate(progress)
+
+    df["progress_m"] = progress
+    df["offroute_m"] = offroute
+    df["bin_idx"] = np.clip((df["progress_m"] // bin_m).astype(int), 0, max(0, n_bins - 1))
+
+    dt_s = df["Timestamp"].diff().dt.total_seconds().to_numpy()
+    dp_m = df["progress_m"].diff().to_numpy()
+
+    speed_kph = np.full(len(df), np.nan)
+    valid = (dt_s > 0.5) & (dt_s <= 300) & (dp_m >= 0)
+    speed_kph[valid] = np.clip((dp_m[valid] / dt_s[valid]) * 3.6, 0.5, 90.0)
+    df["speed_kph"] = speed_kph
+
+    end_ts = df["Timestamp"].iloc[-1]
+    df["eta_remaining_min"] = (end_ts - df["Timestamp"]).dt.total_seconds() / 60.0
+
+    return int(session["session_id"]), df
 
 
 def weighted_mean(values: list[float], weights: list[float]) -> float:
@@ -1139,6 +1198,8 @@ def main() -> None:
     session_match_map: dict[int, pd.DataFrame] = {}
     session_meta_rows = []
 
+    # First pass: attempt to reuse snapped CSVs, collect sessions needing resnap.
+    snap_tasks: list[tuple] = []  # payloads for worker: (session_dict, ref_serialized, bin_m)
     total_sessions = len(sessions)
     for i, session in enumerate(sessions, start=1):
         route_type = session["route_type"]
@@ -1152,8 +1213,44 @@ def main() -> None:
             force_reuse=args.skip_resnap,
         )
 
+        if matched is not None:
+            session_match_map[session["session_id"]] = matched
+        else:
+            # Serialize only the arrays/primitives needed for snapping to avoid pickling cKDTree.
+            ref_serial = {
+                "lat0": ref.lat0,
+                "lng0": ref.lng0,
+                "xy": ref.xy,
+                "cumulative_m": ref.cumulative_m,
+                "total_m": ref.total_m,
+                "n_bins": ref.n_bins,
+            }
+            snap_tasks.append((session, ref_serial, args.bin_meters))
+
+        if i % 20 == 0 or i == total_sessions:
+            log_step(f"Checked reuse for sessions: {i}/{total_sessions}", t0)
+
+    # Run snapping for tasks, optionally in parallel.
+    if snap_tasks:
+        log_step(f"Snapping {len(snap_tasks)} sessions (workers={args.workers})", t0)
+        if args.workers and args.workers > 1:
+            with concurrent.futures.ProcessPoolExecutor(max_workers=args.workers) as ex:
+                for session_id, matched_df in ex.map(match_session_to_reference_worker, snap_tasks):
+                    session_match_map[int(session_id)] = matched_df
+        else:
+            # sequential
+            for payload in snap_tasks:
+                session_id, matched_df = match_session_to_reference_worker(payload)
+                session_match_map[int(session_id)] = matched_df
+
+    # Second pass: assemble match_rows and metadata in original session order, with progress logging.
+    for i, session in enumerate(sessions, start=1):
+        route_type = session["route_type"]
+        ref = ref_map[route_type]
+        matched = session_match_map.get(session["session_id"])  # should exist
         if matched is None:
-            matched = match_session_to_reference(session, ref, args.bin_meters)
+            # This should not happen; skip defensively.
+            continue
 
         # compute observed length; if loaded from CSV it should contain progress_m
         try:
@@ -1200,7 +1297,7 @@ def main() -> None:
         )
 
         if i % 3 == 0 or i == total_sessions:
-            log_step(f"Snapped sessions: {i}/{total_sessions}", t0)
+            log_step(f"Snapped sessions assembled: {i}/{total_sessions}", t0)
 
     all_matches = pd.concat(match_rows, ignore_index=True)
     session_meta_df = pd.DataFrame(session_meta_rows)
