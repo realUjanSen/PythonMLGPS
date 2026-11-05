@@ -96,7 +96,7 @@ def pull_database(tmpdir, serial=None):
     print(f"[+] Database pulled successfully")
     return db_path_local
 
-def export_recent_sessions(conn, after_session_id=None):
+def export_recent_sessions(conn, after_session_id=None, output_dir=CSV_FOLDER):
     """Export sessions newer than the given session id."""
     cursor = conn.cursor()
 
@@ -138,9 +138,14 @@ def export_recent_sessions(conn, after_session_id=None):
         dt = datetime.fromtimestamp(start_time / 1000)
         safe_direction = direction.replace(" -> ", "_to_").replace("<", "").replace(">", "")
         csv_filename = f"session_{session_id:03d}_{dt.strftime('%Y%m%d_%H%M%S')}_{safe_direction}.csv"
-        csv_path = os.path.join(CSV_FOLDER, csv_filename)
-        
-        os.makedirs(CSV_FOLDER, exist_ok=True)
+        os.makedirs(output_dir, exist_ok=True)
+        csv_path = os.path.join(output_dir, csv_filename)
+        if os.path.exists(csv_path):
+            stem, extension = os.path.splitext(csv_filename)
+            csv_path = os.path.join(
+                output_dir,
+                f"{stem}_copy_{datetime.now().strftime('%Y%m%d_%H%M%S')}{extension}",
+            )
         
         with open(csv_path, 'w', newline='') as f:
             writer = csv.writer(f)
@@ -158,20 +163,36 @@ def main():
     parser = argparse.ArgumentParser(description="Fetch and export ShuttleEstimator sessions from device")
     parser.add_argument("--after", type=int, default=None, help="Fetch sessions with id > this value")
     parser.add_argument("--serial", type=str, default=None, help="ADB device serial (optional)")
+    parser.add_argument("--output-dir", default=CSV_FOLDER, help="Directory for exported CSV files")
+    parser.add_argument(
+        "--database",
+        type=str,
+        default=None,
+        help="Use an existing local SQLite database instead of pulling from the phone",
+    )
     args = parser.parse_args()
 
-    serial = args.serial or get_online_adb_device_serial()
-    if not serial:
-        print("[!] No online adb device found. Run `adb devices` and make sure one device is in `device` state.")
-        return
+    serial = None
+    if args.database is None:
+        serial = args.serial or get_online_adb_device_serial()
+        if not serial:
+            print("[!] No online adb device found. Run `adb devices` and make sure one device is in `device` state.")
+            return
 
-    if args.serial is None:
-        print(f"[*] Using active adb device: {serial}")
+        if args.serial is None:
+            print(f"[*] Using active adb device: {serial}")
 
-    os.makedirs(CSV_FOLDER, exist_ok=True)
+    os.makedirs(args.output_dir, exist_ok=True)
     
     with tempfile.TemporaryDirectory() as tmpdir:
-        db_path = pull_database(tmpdir, serial=serial)
+        if args.database:
+            db_path = os.path.abspath(args.database)
+            if not os.path.isfile(db_path):
+                print(f"[!] Local database not found: {db_path}")
+                return
+            print(f"[*] Using local database: {db_path}")
+        else:
+            db_path = pull_database(tmpdir, serial=serial)
         
         if not db_path:
             print("[!] Failed to pull database")
@@ -221,7 +242,11 @@ def main():
                 print(f"Fetching sessions with ID > {resume_after_session_id}...")
                 print("="*60)
 
-                count = export_recent_sessions(conn, after_session_id=resume_after_session_id)
+                count = export_recent_sessions(
+                    conn,
+                    after_session_id=resume_after_session_id,
+                    output_dir=args.output_dir,
+                )
             else:
                 cursor.execute(
                     """
@@ -251,10 +276,10 @@ def main():
                 print("Fetching all sessions...")
                 print("="*60)
 
-                count = export_recent_sessions(conn)
+                count = export_recent_sessions(conn, output_dir=args.output_dir)
             
             print("\n" + "="*60)
-            print(f"✅ DONE - {count} sessions exported to csv/")
+            print(f"✅ DONE - {count} sessions exported to {args.output_dir}/")
             print("="*60)
             
             conn.close()
