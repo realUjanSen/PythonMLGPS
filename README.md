@@ -182,6 +182,18 @@ The route profile is stored as:
 
 The same script also writes `choke_points.csv`, which highlights bins with the strongest congestion risk.
 
+### Data-quality finding: corrupted session boundaries
+
+The predicted-versus-actual plots revealed a data-quality issue that must be handled before trusting model metrics. Some exported sessions contain stale GPS points from another date or continue after a long recording gap. Since `target_eta_min` is calculated from the last timestamp in a session, these points create impossible labels.
+
+Observed examples include:
+
+- a session dated September 22 with an initial point from September 2, producing a target near 28,794 minutes
+- sessions with multi-hour gaps that produce targets above 700 or 1,000 minutes
+- repeated horizontal prediction bands caused by many rows sharing corrupted or poorly separated session targets
+
+These records explained the extreme predictions and negative R² values in the original diagnostic plots. This has now been fixed in `train_eta_model.py`: each session is anchored to the date/time in its filename, points outside a three-hour recording window are removed, and the trace is truncated at the first gap longer than 20 minutes. The snapped data, route profiles, training tables, metrics, and `eta_model.joblib` were regenerated with `--force-resnap`. The corrected training table contains no targets above 180 minutes.
+
 ### 6) Training dataset construction
 
 `build_training_table()` creates a supervised learning dataset.

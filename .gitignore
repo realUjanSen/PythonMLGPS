@@ -1,0 +1,19 @@
+# Python cache and local environments
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Node dependencies
+node_modules/
+
+# Generated route and model artifacts
+csv_snapped/
+model_outputs/
+
+# Local phone recovery backups
+recovery/
+
+# Local logs and editor metadata
+*.log
+.vscode/

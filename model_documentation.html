@@ -235,6 +235,24 @@
     </section>
 
     <section>
+      <h2>4D) Data Quality Finding: Corrupted Session Boundaries</h2>
+      <div class="card small">
+        <p>
+          The predicted-versus-actual plots exposed a data problem before a model problem. Several exported sessions contain stale GPS points from another date or continue recording after a long pause. Because the target is calculated as the final session timestamp minus the current timestamp, those rows become impossible ETA targets.
+        </p>
+        <ul>
+          <li>One recovered session contained a first point dated 2026-09-02 even though the session was recorded on 2026-09-22. Its target ETA reached approximately 28,794 minutes.</li>
+          <li>Other sessions contained multi-hour gaps or points from the previous day, producing targets above 700 or 1,000 minutes.</li>
+          <li>These outliers create horizontal prediction bands, inflate RMSE, produce extreme tree-model predictions, and make the validation scatter look structured instead of cloud-like.</li>
+          <li>The negative predictions visible in the HistGradientBoosting plot are also a consequence of unconstrained regression extrapolation in the presence of corrupted targets. ETA post-processing should clamp predictions to zero or use a non-negative model objective.</li>
+        </ul>
+        <p>
+          <strong>Implemented preprocessing:</strong> the trainer now uses the date and start time embedded in each session filename as the session anchor, discards points outside a three-hour recording window, and truncates a session at the first gap longer than 20 minutes. The snapped data, route profiles, training tables, metrics, and model artifact have been regenerated with <code>--force-resnap</code>. The cleaned training table contains no targets above 180 minutes.
+        </p>
+      </div>
+    </section>
+
+    <section>
       <h2>4C) Google Fused Location Limitations — Clustering and Off-Road Bias</h2>
       <div class="card small">
         <p>

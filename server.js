@@ -147,6 +147,7 @@ app.get("/api/delete-csv", (req, res) => {
 app.post("/api/save-csv", (req, res) => {
   try {
     const payload = req.body || {};
+    const { source, folder } = getSourceFolder(payload.source);
     const files = Array.isArray(payload.files)
       ? payload.files
       : payload.fileName && payload.csvText
@@ -166,16 +167,24 @@ app.post("/api/save-csv", (req, res) => {
         return res.status(400).json({ error: `Invalid file name: ${fileName}` });
       }
 
-      const filePath = path.join(CSV_FOLDERS.original, fileName);
-      if (path.dirname(filePath) !== CSV_FOLDERS.original) {
+      const filePath = path.join(folder, fileName);
+      if (path.dirname(filePath) !== folder) {
         return res.status(400).json({ error: `Invalid file path: ${fileName}` });
       }
 
       fs.writeFileSync(filePath, csvText, "utf8");
       saved.push(fileName);
+
+      if (source === "original") {
+        const snappedFileName = fileName.replace(/\.csv$/i, "") + "_snapped.csv";
+        const snappedPath = path.join(CSV_FOLDERS.snapped, snappedFileName);
+        if (fs.existsSync(snappedPath)) {
+          fs.unlinkSync(snappedPath);
+        }
+      }
     }
 
-    res.json({ success: true, saved });
+    res.json({ success: true, source, saved });
   } catch (error) {
     console.error("Error saving CSV file(s):", error);
     res.status(500).json({ error: "Failed to save CSV file(s)" });

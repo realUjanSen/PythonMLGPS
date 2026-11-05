@@ -1224,7 +1224,7 @@ function handleRadiusChange() {
 }
 
 function getCleanedSessionsKey() {
-  return "cleanedSessions_v1";
+  return "cleanedSessions_v2";
 }
 
 function isQuotaExceededError(err) {
@@ -1263,7 +1263,7 @@ function setRouteLabVisibility(visible) {
   panel.classList.toggle("is-hidden", !visible);
 }
 
-function saveCleanedSession() {
+async function saveCleanedSession() {
   const session = getSelectedSession();
   if (!session) {
     setStatus("Select a session before saving.", true);
@@ -1271,35 +1271,34 @@ function saveCleanedSession() {
   }
 
   try {
-    const cleanedSessions = JSON.parse(localStorage.getItem(getCleanedSessionsKey()) || "{}");
-
     const saveAllVisible = Boolean($("eraseAllVisible")?.checked) && state.showAll;
     const targets = saveAllVisible ? state.sessions : [session];
-    targets.forEach((target) => {
-      cleanedSessions[target.fileName] = {
-        headers: target.headers,
-        rows: target.rows,
-        timestamp: Date.now()
-      };
+    const files = targets.map((target) => ({
+      fileName: target.fileName,
+      csvText: [
+        target.headers.map(escapeCsv).join(","),
+        ...target.rows.map((row) => row.cells.map(escapeCsv).join(","))
+      ].join("\n")
+    }));
+
+    const response = await fetch("/api/save-csv", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ source: state.csvSource, files })
     });
-
-    const saveResult = persistCleanedSessionsWithPrune(cleanedSessions);
-    if (!saveResult.ok) {
-      if (saveResult.quota) {
-        setStatus("Error saving: browser storage is full for cleanedSessions_v1. Use Download cleaned CSV, or save fewer sessions at once.", true);
-        return;
-      }
-      throw saveResult.error;
+    const result = await response.json();
+    if (!response.ok || !result.success) {
+      throw new Error(result.error || `HTTP ${response.status}`);
     }
 
-    const pruneMsg = saveResult.pruned > 0 ? ` (pruned ${saveResult.pruned} older saved session(s) due to storage limit)` : "";
-    if (targets.length > 1) {
-      setStatus(`Saved cleaned CSV data for ${targets.length} visible sessions. Data persists across refreshes${pruneMsg}.`);
-    } else {
-      setStatus(`Cleaned CSV saved for ${session.fileName}. Data persists across page refreshes${pruneMsg}.`);
-    }
+    const cleanedSessions = JSON.parse(localStorage.getItem(getCleanedSessionsKey()) || "{}");
+    targets.forEach((target) => delete cleanedSessions[target.fileName]);
+    localStorage.setItem(getCleanedSessionsKey(), JSON.stringify(cleanedSessions));
+
+    const folderLabel = state.csvSource === "snapped" ? "csv_snapped" : "csv";
+    setStatus(`Saved cleaned CSV data for ${targets.length} session(s) to ${folderLabel}.`);
   } catch (err) {
-    setStatus(`Error saving: ${err.message}`, true);
+    setStatus(`Error saving to disk: ${err.message}. Use Download cleaned CSV as a fallback.`, true);
   }
 }
 

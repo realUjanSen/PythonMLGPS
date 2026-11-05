@@ -33,6 +33,9 @@ except Exception:
 
 
 SESSION_PATTERN = re.compile(r"session_(\d+)_")
+SESSION_START_PATTERN = re.compile(r"^session_\d+_(\d{8})_(\d{6})_")
+SESSION_MAX_START_OFFSET_MIN = 180.0
+SESSION_MAX_GAP_MIN = 20.0
 
 
 @dataclass
@@ -78,6 +81,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         default=True,
         help="Reuse any existing snapped CSV files in --snapped-out-dir by default.",
+    )
+    parser.add_argument(
+        "--force-resnap",
+        action="store_true",
+        help="Ignore existing snapped CSV files and rebuild them from cleaned raw sessions.",
     )
     parser.add_argument(
         "--workers",
@@ -170,6 +178,16 @@ def session_id_from_name(file_name: str) -> int | None:
     if not match:
         return None
     return int(match.group(1))
+
+
+def session_start_from_name(file_name: str) -> pd.Timestamp | None:
+    match = SESSION_START_PATTERN.search(file_name)
+    if not match:
+        return None
+    try:
+        return pd.to_datetime(f"{match.group(1)}_{match.group(2)}", format="%Y%m%d_%H%M%S")
+    except Exception:
+        return None
 
 
 def classify_route_type_from_time(start_ts: pd.Timestamp) -> str | None:
@@ -351,6 +369,21 @@ def load_sessions(csv_dir: Path) -> list[dict]:
                 break
 
         df = df.dropna(subset=["Timestamp", "Latitude", "Longitude"]).sort_values("Timestamp")
+
+        # A restarted recorder can leave stale points from another date or append
+        # a later trip to the same session. Use the filename timestamp as the
+        # session anchor before deriving ETA targets.
+        expected_start = session_start_from_name(file_path.name)
+        if expected_start is not None and not df.empty:
+            elapsed_min = (df["Timestamp"] - expected_start).dt.total_seconds() / 60.0
+            df = df[(elapsed_min >= -30.0) & (elapsed_min <= SESSION_MAX_START_OFFSET_MIN)].copy()
+
+        if len(df) >= 2:
+            gaps_min = df["Timestamp"].diff().dt.total_seconds().div(60.0)
+            gap_positions = np.flatnonzero((gaps_min > SESSION_MAX_GAP_MIN).to_numpy())
+            if gap_positions.size:
+                df = df.iloc[: int(gap_positions[0])].copy()
+
         if len(df) < 5:
             continue
 
@@ -1204,14 +1237,16 @@ def main() -> None:
     for i, session in enumerate(sessions, start=1):
         route_type = session["route_type"]
         ref = ref_map[route_type]
-        matched = load_snapped_csv_if_reusable(
-            session=session,
-            ref=ref,
-            csv_dir=csv_dir,
-            snapped_out_dir=snapped_out_dir,
-            bin_meters=args.bin_meters,
-            force_reuse=args.skip_resnap,
-        )
+        matched = None
+        if not args.force_resnap:
+            matched = load_snapped_csv_if_reusable(
+                session=session,
+                ref=ref,
+                csv_dir=csv_dir,
+                snapped_out_dir=snapped_out_dir,
+                bin_meters=args.bin_meters,
+                force_reuse=args.skip_resnap,
+            )
 
         if matched is not None:
             session_match_map[session["session_id"]] = matched
