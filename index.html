@@ -10,10 +10,7 @@
 <body>
   <header class="topbar">
     <h1>GPS Session Cleaner</h1>
-    <div class="node-status-shell">
-      <div id="nodeStatus" class="node-status checking">Checking node...</div>
-      <button id="copyKillCmdBtn" class="node-copy-btn" type="button" title="Copy PowerShell kill command" aria-label="Copy PowerShell kill command">Copy</button>
-    </div>
+    <div id="nodeStatus" class="node-status checking">Node: Checking...</div>
   </header>
 
   <main class="layout">
@@ -22,7 +19,11 @@
         <h2>Session List</h2>
         <div class="toolbar">
           <button id="reloadBtn" type="button">Reload CSV</button>
-          <button id="undoTopBtn" type="button">Undo</button>
+          <label for="csvSourceSelect">Source</label>
+          <select id="csvSourceSelect">
+            <option value="original" selected>Original (csv)</option>
+            <option value="snapped">Snapped (csv_snapped)</option>
+          </select>
           <input id="filePicker" type="file" accept=".csv" multiple>
           <label><input id="showAllToggle" type="checkbox" checked> Show all routes</label>
           <button id="deleteSessionBtn" type="button">Delete selected session</button>
@@ -60,9 +61,6 @@
           <span id="eraserBadge" class="badge">ERASER OFF</span>
         </div>
         <div class="field-row">
-          <label><input id="pointInspectorMode" type="checkbox"> Enable point inspector</label>
-        </div>
-        <div class="field-row">
           <label for="eraserRadius">Brush size: <span id="radiusValue">25</span>m</label>
           <input id="eraserRadius" type="range" min="2" max="500" value="25">
         </div>
@@ -73,17 +71,27 @@
         <div class="field-row">
           <label><input id="eraseAllVisible" type="checkbox" checked> Erase across all visible sessions</label>
         </div>
+        <div class="field-row">
+          <label><input id="pointInspectorMode" type="checkbox"> Point investigator mode</label>
+        </div>
+        <div id="pointInspectorInfo" class="meta">Point inspector idle. Click on the map to inspect nearest point.</div>
         <div class="toolbar">
           <button id="undoBtn" type="button">Undo</button>
           <button id="resetBtn" type="button">Reset session</button>
           <button id="saveCleanedBtn" type="button">Save cleaned CSV</button>
           <button id="downloadBtn" type="button">Download cleaned CSV</button>
         </div>
-        <div id="pointInspector" class="meta" style="margin-top:8px;">Enable point inspector, then click any visible route line to inspect the nearest GPS point.</div>
-        <p class="small-note">Click or hold-drag on the map in eraser mode to erase points. Use <strong>middle mouse button drag</strong> or <strong>Ctrl+drag</strong> to pan around the map. Press <strong>Ctrl+Z</strong> to undo the last erase. With "Erase across all visible sessions", one brush pass can clean multiple routes at once.</p>
+        <p class="small-note">Click or hold-drag on the map in eraser mode to erase points. Hold <strong>Ctrl</strong> while dragging to pan around the map. With "Erase across all visible sessions", one brush pass can clean multiple routes at once.</p>
       </section>
 
-      <section class="panel" style="display: none;">
+      <section class="panel">
+        <h2>Advanced Panels</h2>
+        <div class="field-row">
+          <label><input id="showRouteLabToggle" type="checkbox"> Show Route Lab</label>
+        </div>
+      </section>
+
+      <section id="routeLabPanel" class="panel is-hidden">
         <h2>Route Lab</h2>
         <div class="field-row">
           <label for="routeVariantSelect">Route Variant</label>
@@ -142,10 +150,6 @@
 
     <section class="map-wrap">
       <div id="mapModeIndicator" class="map-mode">Normal mode</div>
-      <div class="map-overlay-controls">
-        <button id="eraserOverlayBtn" type="button" class="overlay-mode-btn">Eraser</button>
-        <button id="pointInspectorOverlayBtn" type="button" class="overlay-mode-btn">Inspector</button>
-      </div>
       <div id="map"></div>
     </section>
   </main>

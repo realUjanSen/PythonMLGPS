@@ -38,6 +38,7 @@ function createDefaultRouteVariants() {
 const state = {
   map: null,
   sessions: [],
+  csvSource: localStorage.getItem("csvSource") || "original",
   selectedId: null,
   showAll: true,
   renderLayers: new Map(),
@@ -46,7 +47,7 @@ const state = {
   deletedSessionIds: new Set(),
   routeVariants: createDefaultRouteVariants(),
   selectedVariantKey: "route2",
-  showVariants: true,
+  showVariants: false,
   waypointEditMode: false,
   midpointMode: false,
   showTraffic: true,
@@ -55,20 +56,21 @@ const state = {
   currentTrafficInfo: null,
   isErasing: false,
   eraserPreview: null,
+  inspectorMarker: null,
+  pointInspectorMode: false,
   eraserLastEraseTime: 0,
   eraserThrottleMs: 350,
   renderDebounceTimer: null,
-  renderDebounceMs: 150,
-  pointPopup: null
+  renderDebounceMs: 150
 };
 
 function $(id) {
   return document.getElementById(id);
 }
 
-async function getCsvFileList() {
+async function getCsvFileList(source = "original") {
   try {
-    const response = await fetch("/api/list-csv-files");
+    const response = await fetch(`/api/list-csv-files?source=${encodeURIComponent(source)}`);
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
     }
@@ -79,89 +81,35 @@ async function getCsvFileList() {
   }
 }
 
+async function refreshNodeStatus() {
+  const badge = $("nodeStatus");
+  if (!badge) return;
+
+  badge.textContent = "Node: Checking...";
+  badge.classList.remove("online", "offline");
+  badge.classList.add("checking");
+
+  try {
+    const response = await fetch("/api/list-csv-files?source=original", { cache: "no-store" });
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    badge.textContent = "Node: Online";
+    badge.classList.remove("checking", "offline");
+    badge.classList.add("online");
+  } catch (error) {
+    badge.textContent = "Node: Offline";
+    badge.classList.remove("checking", "online");
+    badge.classList.add("offline");
+  }
+}
+
 function setStatus(message, isWarn = false) {
   const box = $("statusBox");
   if (!box) return;
   box.textContent = message;
   box.classList.toggle("warn", isWarn);
-}
-
-async function copyTextToClipboard(text) {
-  if (!text) return false;
-
-  try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text);
-      return true;
-    }
-  } catch (error) {
-    console.warn("Clipboard API copy failed:", error);
-  }
-
-  const textarea = document.createElement("textarea");
-  textarea.value = text;
-  textarea.setAttribute("readonly", "true");
-  textarea.style.position = "fixed";
-  textarea.style.left = "-9999px";
-  document.body.appendChild(textarea);
-  textarea.select();
-
-  try {
-    const ok = document.execCommand("copy");
-    document.body.removeChild(textarea);
-    return ok;
-  } catch (error) {
-    document.body.removeChild(textarea);
-    console.warn("Fallback copy failed:", error);
-    return false;
-  }
-}
-
-async function refreshNodeStatus() {
-  const badge = $("nodeStatus");
-  const copyBtn = $("copyKillCmdBtn");
-  if (!badge) return;
-
-  try {
-    const response = await fetch("/api/health", { cache: "no-store" });
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
-    }
-
-    const data = await response.json();
-    const pid = Number.isFinite(Number(data.pid)) ? Number(data.pid) : null;
-    const killCommand = data.killCommand || (pid ? `Stop-Process -Id ${pid} -Force` : "taskkill /F /IM node.exe");
-    const pidLabel = pid ?? "unavailable";
-
-    badge.innerHTML = [
-      `<div>Node online · PID ${pidLabel}</div>`,
-      `<div style="font-family: Consolas, 'Courier New', monospace; font-size: 11px; color: inherit; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 280px;">${killCommand}</div>`
-    ].join("");
-    badge.classList.remove("checking", "offline");
-    badge.classList.add("online");
-
-    if (copyBtn) {
-      copyBtn.onclick = async () => {
-        const copied = await copyTextToClipboard(killCommand);
-        copyBtn.textContent = copied ? "Copied" : "Copy";
-        window.setTimeout(() => {
-          copyBtn.textContent = "Copy";
-        }, 1200);
-      };
-    }
-  } catch (error) {
-    badge.innerHTML = "Node offline";
-    badge.classList.remove("checking", "online");
-    badge.classList.add("offline");
-    if (copyBtn) {
-      copyBtn.onclick = null;
-    }
-  }
-}
-
-function startNodeStatusPolling() {
-  refreshNodeStatus();
-  window.setInterval(refreshNodeStatus, 5000);
 }
 
 function safeNum(value) {
@@ -215,7 +163,7 @@ function rebuildPointRows(session) {
   session.pointRows = session.rows.filter((row) => row.hasCoords);
 }
 
-function parseCsv(text, fileName) {
+function parseCsv(text, fileName, source = "original") {
   const rows = text
     .replace(/\r/g, "")
     .split("\n")
@@ -264,6 +212,7 @@ function parseCsv(text, fileName) {
   const session = {
     id: fileName,
     fileName,
+    source,
     headers,
     rows: parsedRows,
     pointRows,
@@ -388,217 +337,26 @@ function saveRouteVariantsToStorage() {
 
 function loadRouteVariantsFromStorage() {
   const defaults = createDefaultRouteVariants();
-  
-  // Clear old Cityflo route variant data on load
-  localStorage.removeItem("routeVariantsV0");
-  localStorage.removeItem("routeVariantsV1");
-  
-  // Start fresh - no pre-loaded variants
+  const stored = JSON.parse(localStorage.getItem("routeVariantsV1") || "null");
+
+  if (!stored || typeof stored !== "object") {
+    state.routeVariants = defaults;
+    return;
+  }
+
+  ROUTE_VARIANT_KEYS.forEach((key) => {
+    const points = Array.isArray(stored[key]) ? stored[key] : [];
+    defaults[key].points = points
+      .filter((p) => Array.isArray(p) && p.length >= 2 && Number.isFinite(Number(p[0])) && Number.isFinite(Number(p[1])))
+      .map((p) => [Number(p[0]), Number(p[1])]);
+  });
+
   state.routeVariants = defaults;
 }
 
 function getSegments(session) {
   const coords = session.pointRows.map((row) => [row.lat, row.lng]);
   return coords.length > 1 ? [coords] : [];
-}
-
-function formatPointValue(value) {
-  if (value === null || value === undefined || value === "") return "N/A";
-  return String(value);
-}
-
-function buildPointInspectorHtml(session, pointRow, clickDistanceMeters) {
-  const headers = Array.isArray(session.headers) ? session.headers : [];
-  const values = Array.isArray(pointRow.cells) ? pointRow.cells : [];
-  const rowMap = new Map();
-
-  headers.forEach((header, index) => {
-    rowMap.set(String(header).trim().toLowerCase(), values[index]);
-  });
-
-  const timestamp = pointRow.timestamp || rowMap.get("timestamp") || rowMap.get("time") || "N/A";
-  const latitude = pointRow.lat ?? rowMap.get("latitude") ?? "N/A";
-  const longitude = pointRow.lng ?? rowMap.get("longitude") ?? "N/A";
-  const accuracy = rowMap.get("accuracy(m)") ?? rowMap.get("accuracy") ?? "N/A";
-  const speed = rowMap.get("speed(m/s)") ?? rowMap.get("speed") ?? "N/A";
-  const bearing = rowMap.get("bearing(°)") ?? rowMap.get("bearing") ?? rowMap.get("bearing(�)") ?? "N/A";
-  const altitude = rowMap.get("altitude(m)") ?? rowMap.get("altitude") ?? "N/A";
-  const satellite = rowMap.get("satellite") ?? rowMap.get("satellite_name") ?? "N/A";
-  const country = rowMap.get("country") ?? rowMap.get("satellite_country") ?? "N/A";
-
-  let html = [
-    "<div class='meta-grid'>",
-    `<div class='meta-item'><span class='label'>File</span><span class='value' title='${session.fileName}'>${session.fileName}</span></div>`,
-    `<div class='meta-item'><span class='label'>Route</span><span class='value'>${detectRouteName(session.fileName)}</span></div>`,
-    `<div class='meta-item'><span class='label'>Point #</span><span class='value'>${pointRow.index + 1}</span></div>`,
-    `<div class='meta-item'><span class='label'>Timestamp</span><span class='value'>${formatPointValue(timestamp)}</span></div>`,
-    `<div class='meta-item'><span class='label'>Latitude</span><span class='value'>${formatPointValue(latitude)}</span></div>`,
-    `<div class='meta-item'><span class='label'>Longitude</span><span class='value'>${formatPointValue(longitude)}</span></div>`,
-    `<div class='meta-item'><span class='label'>Accuracy</span><span class='value'>${formatPointValue(accuracy)}</span></div>`,
-    `<div class='meta-item'><span class='label'>Speed</span><span class='value'>${formatPointValue(speed)}</span></div>`,
-    `<div class='meta-item'><span class='label'>Bearing</span><span class='value'>${formatPointValue(bearing)}</span></div>`,
-    `<div class='meta-item'><span class='label'>Altitude</span><span class='value'>${formatPointValue(altitude)}</span></div>`,
-    `<div class='meta-item'><span class='label'>Satellite</span><span class='value'>${formatPointValue(satellite)}</span></div>`,
-    `<div class='meta-item'><span class='label'>Country</span><span class='value'>${formatPointValue(country)}</span></div>`,
-    `<div class='meta-item'><span class='label'>Click Offset</span><span class='value'>${formatNumber(clickDistanceMeters, 1)} m</span></div>`
-  ].join("");
-
-  // Add all remaining CSV columns not yet shown
-  const shownKeys = new Set(["timestamp", "time", "latitude", "longitude", "accuracy(m)", "accuracy", 
-                              "speed(m/s)", "speed", "bearing(°)", "bearing", "bearing(�)", 
-                              "altitude(m)", "altitude", "satellite", "satellite_name", "country", "satellite_country"]);
-  
-  headers.forEach((header, index) => {
-    const key = String(header).trim().toLowerCase();
-    if (!shownKeys.has(key)) {
-      const value = values[index] ?? "N/A";
-      html += `<div class='meta-item'><span class='label'>${header}</span><span class='value'>${formatPointValue(value)}</span></div>`;
-    }
-  });
-
-  html += "</div>";
-  return html;
-}
-
-function updatePointInspector(session, pointRow, clickLatLng) {
-  const box = $("pointInspector");
-  if (!box) return;
-
-  if (!session || !pointRow) {
-    box.textContent = $("pointInspectorMode")?.checked
-      ? "Click any visible route line to inspect the nearest GPS point."
-      : "Enable point inspector to inspect route points.";
-    return;
-  }
-
-  const clickDistanceMeters = clickLatLng
-    ? haversineMeters([pointRow.lat, pointRow.lng], [clickLatLng.lat, clickLatLng.lng])
-    : 0;
-
-  box.innerHTML = buildPointInspectorHtml(session, pointRow, clickDistanceMeters);
-}
-
-function showPointPopup(latlng, pointRow) {
-  // Remove any existing popup
-  if (state.pointPopup) {
-    state.map.removeLayer(state.pointPopup);
-  }
-
-  if (!latlng || !pointRow) return;
-
-  const pointNum = pointRow.index + 1;
-  const lat = Number(pointRow.lat).toFixed(6);
-  const lng = Number(pointRow.lng).toFixed(6);
-  const popupHtml = `
-    <div style="font-weight: bold; font-size: 14px; margin-bottom: 4px;">Point #${pointNum}</div>
-    <div style="font-size: 12px; font-family: monospace; white-space: nowrap;">
-      ${lat}, ${lng}
-    </div>
-  `;
-
-  const popup = L.popup({ closeButton: false, autoClose: false, className: "point-inspector-popup" })
-    .setLatLng(latlng)
-    .setContent(popupHtml)
-    .addTo(state.map);
-
-  state.pointPopup = popup;
-
-  // Auto-close popup after 5 seconds
-  setTimeout(() => {
-    if (state.pointPopup === popup && state.map) {
-      state.map.removeLayer(popup);
-      state.pointPopup = null;
-    }
-  }, 5000);
-}
-
-function findNearestPointInSession(session, latlng) {
-  if (!session || !Array.isArray(session.pointRows) || session.pointRows.length === 0 || !latlng) return null;
-
-  let bestRow = null;
-  let bestDistance = Infinity;
-
-  session.pointRows.forEach((row) => {
-    const distance = haversineMeters([row.lat, row.lng], [latlng.lat, latlng.lng]);
-    if (distance < bestDistance) {
-      bestDistance = distance;
-      bestRow = row;
-    }
-  });
-
-  return bestRow ? { row: bestRow, distanceMeters: bestDistance } : null;
-}
-
-function findNearestVisiblePoint(latlng) {
-  if (!latlng) return null;
-
-  const visibleSessions = state.sessions.filter((session) => state.showAll || session.id === state.selectedId);
-  let bestMatch = null;
-
-  visibleSessions.forEach((session) => {
-    const match = findNearestPointInSession(session, latlng);
-    if (!match) return;
-
-    if (!bestMatch || match.distanceMeters < bestMatch.distanceMeters) {
-      bestMatch = {
-        session,
-        row: match.row,
-        distanceMeters: match.distanceMeters
-      };
-    }
-  });
-
-
-    function syncOverlayModeButtons() {
-      const eraserButton = $("eraserOverlayBtn");
-      const inspectorButton = $("pointInspectorOverlayBtn");
-      const eraserOn = Boolean($("eraserMode")?.checked);
-      const inspectorOn = Boolean($("pointInspectorMode")?.checked);
-
-      if (eraserButton) {
-        eraserButton.textContent = eraserOn ? "Eraser: ON" : "Eraser";
-        eraserButton.classList.toggle("active", eraserOn);
-      }
-
-      if (inspectorButton) {
-        inspectorButton.textContent = inspectorOn ? "Inspector: ON" : "Inspector";
-        inspectorButton.classList.toggle("active", inspectorOn);
-      }
-    }
-  return bestMatch;
-}
-
-function inspectPointAt(latlng, source = "map") {
-  if (!$("pointInspectorMode")?.checked) return null;
-
-  const match = findNearestVisiblePoint(latlng);
-  if (!match) {
-    updatePointInspector(null, null, null);
-    setStatus("Point inspector could not find a visible route point near that click.", true);
-    console.info(`[Point Inspector] No visible point matched (${source}).`);
-    return null;
-  }
-
-  updatePointInspector(match.session, match.row, latlng);
-  setStatus(`Point inspector: ${match.session.fileName} point ${match.row.index + 1} (${formatNumber(match.distanceMeters, 1)} m away).`);
-  console.groupCollapsed(`[Point Inspector] ${match.session.fileName} #${match.row.index + 1}`);
-  console.info("Source:", source);
-  console.info("Distance from click (m):", formatNumber(match.distanceMeters, 2));
-  console.table({
-    fileName: match.session.fileName,
-    pointIndex: match.row.index + 1,
-    timestamp: match.row.timestamp || "",
-    latitude: match.row.lat,
-    longitude: match.row.lng,
-    accuracy: match.row.accuracy,
-    speed: match.row.cells?.[4] ?? null,
-    bearing: match.row.cells?.[5] ?? null,
-    altitude: match.row.cells?.[6] ?? null,
-    satellite: match.row.cells?.[7] ?? null,
-    country: match.row.cells?.[8] ?? null
-  });
-  console.groupEnd();
-  return match;
 }
 
 function renderSessionList() {
@@ -610,11 +368,15 @@ function renderSessionList() {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "session-item" + (state.selectedId === session.id ? " active" : "");
-    button.innerHTML = `${session.fileName}<span class="session-sub">rows: ${session.rows.length}, points: ${session.pointRows.length}</span>`;
+    const sourceTag = session.source === "snapped" ? "snapped" : "original";
+    button.innerHTML = `${session.fileName}<span class="session-sub">source: ${sourceTag} | rows: ${session.rows.length}, points: ${session.pointRows.length}</span>`;
     button.addEventListener("click", () => {
-      state.selectedId = session.id;
+      // Clicking the same session toggles selection off so Show All can be used without a focused session.
+      state.selectedId = state.selectedId === session.id ? null : session.id;
       state.shouldAutoFit = true;
-      loadCleanedSessionIfAvailable();
+      if (state.selectedId) {
+        loadCleanedSessionIfAvailable();
+      }
       renderSessionList();
       renderMeta();
       forceRenderMap();
@@ -632,15 +394,7 @@ function renderMeta() {
   if (!meta || !classSelect || !morningVariantSelect) return;
 
   if (!session) {
-    const morningCount = state.sessions.filter(s => s.fileName.includes("Home_to_Office")).length;
-    const eveningCount = state.sessions.filter(s => s.fileName.includes("Office_to_Home")).length;
-    meta.innerHTML = `
-      <div class='meta-grid'>
-        <div class='meta-item'><span class='label'>Total Sessions</span><span class='value'>${state.sessions.length}</span></div>
-        <div class='meta-item'><span class='label'>Morning</span><span class='value'>${morningCount}</span></div>
-        <div class='meta-item'><span class='label'>Evening</span><span class='value'>${eveningCount}</span></div>
-      </div>
-    `;
+    meta.textContent = "No session selected.";
     classSelect.value = "";
     morningVariantSelect.value = "";
     return;
@@ -648,23 +402,19 @@ function renderMeta() {
 
   const firstRow = session.rows[0];
   const lastRow = session.rows[session.rows.length - 1];
-  const morningCount = state.sessions.filter(s => s.fileName.includes("Home_to_Office")).length;
-  const eveningCount = state.sessions.filter(s => s.fileName.includes("Office_to_Home")).length;
 
-  meta.innerHTML = `
-    <div class='meta-grid'>
-      <div class='meta-item'><span class='label'>File</span><span class='value' title='${session.fileName}'>${session.fileName.substring(0, 30)}...</span></div>
-      <div class='meta-item'><span class='label'>Route</span><span class='value'>${detectRouteName(session.fileName)}</span></div>
-      <div class='meta-item'><span class='label'>Start</span><span class='value'>${firstRow?.timestamp?.substring(0, 19) || "N/A"}</span></div>
-      <div class='meta-item'><span class='label'>End</span><span class='value'>${lastRow?.timestamp?.substring(0, 19) || "N/A"}</span></div>
-      <div class='meta-item'><span class='label'>Rows</span><span class='value'>${session.rows.length}</span></div>
-      <div class='meta-item'><span class='label'>GPS Pts</span><span class='value'>${session.pointRows.length}</span></div>
-      <div class='meta-item'><span class='label'>Total Sess</span><span class='value'>${state.sessions.length}</span></div>
-      <div class='meta-item'><span class='label'>Morning</span><span class='value'>${morningCount}</span></div>
-      <div class='meta-item'><span class='label'>Evening</span><span class='value'>${eveningCount}</span></div>
-      <div class='meta-item'><span class='label'>Variant</span><span class='value'>${getMorningVariantLabel(session.morningVariant).substring(0, 20)}</span></div>
-    </div>
-  `;
+  meta.innerHTML = [
+    "<table class='meta-table'>",
+    `<tr><td>File</td><td>${session.fileName}</td></tr>`,
+    `<tr><td>Route</td><td>${detectRouteName(session.fileName)}</td></tr>`,
+    `<tr><td>Start Time</td><td>${firstRow?.timestamp || "N/A"}</td></tr>`,
+    `<tr><td>End Time</td><td>${lastRow?.timestamp || "N/A"}</td></tr>`,
+    `<tr><td>Total Rows</td><td>${session.rows.length}</td></tr>`,
+    `<tr><td>GPS Points</td><td>${session.pointRows.length}</td></tr>`,
+    `<tr><td>Morning Variant</td><td>${getMorningVariantLabel(session.morningVariant)}</td></tr>`,
+    `<tr><td>Columns</td><td>${session.headers.join(", ")}</td></tr>`,
+    "</table>"
+  ].join("");
 
   classSelect.value = session.classLabel || "";
   morningVariantSelect.value = session.morningVariant || "";
@@ -1197,6 +947,78 @@ function getEraseTargetSessions() {
   });
 }
 
+function clearInspectorMarker() {
+  if (state.inspectorMarker && state.map) {
+    try {
+      state.map.removeLayer(state.inspectorMarker);
+    } catch (e) {}
+    state.inspectorMarker = null;
+  }
+}
+
+function inspectNearestPoint(latlng) {
+  if (!state.map) return;
+
+  const infoBox = $("pointInspectorInfo");
+  const selected = getSelectedSession();
+  const searchAcrossAll = Boolean($("eraseAllVisible")?.checked) && state.showAll;
+  const visibleSessions = state.showAll
+    ? state.sessions
+    : state.sessions.filter((session) => session.id === state.selectedId);
+  let candidates = [];
+  if (selected && !searchAcrossAll) {
+    candidates = [selected];
+  } else {
+    candidates = visibleSessions.length > 0 ? visibleSessions : state.sessions;
+  }
+
+  let best = null;
+  for (const session of candidates) {
+    for (const row of session.pointRows) {
+      const d = state.map.distance(latlng, [row.lat, row.lng]);
+      if (!best || d < best.distanceM) {
+        best = { session, row, distanceM: d };
+      }
+    }
+  }
+
+  if (!best) {
+    if (infoBox) infoBox.textContent = "No point rows available for inspection.";
+    clearInspectorMarker();
+    return;
+  }
+
+  clearInspectorMarker();
+  state.inspectorMarker = L.circleMarker([best.row.lat, best.row.lng], {
+    radius: 6,
+    color: "#1f2933",
+    weight: 2,
+    fillColor: "#ffb020",
+    fillOpacity: 1
+  }).addTo(state.map);
+
+  const sourceTag = best.session.source === "snapped" ? "snapped" : "original";
+  state.inspectorMarker.bindPopup(
+    `Nearest point<br>${best.session.fileName}<br>source=${sourceTag}<br>distance=${best.distanceM.toFixed(1)}m`
+  ).openPopup();
+
+  if (infoBox) {
+    infoBox.innerHTML = [
+      `<b>Session:</b> ${best.session.fileName}`,
+      `<b>Source:</b> ${sourceTag}`,
+      `<b>Row index:</b> ${best.row.index}`,
+      `<b>Lat/Lng:</b> ${best.row.lat.toFixed(6)}, ${best.row.lng.toFixed(6)}`,
+      `<b>Timestamp:</b> ${best.row.timestamp || "N/A"}`,
+      `<b>Distance from click:</b> ${best.distanceM.toFixed(1)} m`
+    ].join("<br>");
+  }
+
+  const scopeLabel = selected && !searchAcrossAll
+    ? "selected session"
+    : (state.showAll ? "all visible sessions" : "available sessions");
+  setStatus(`Point investigator (${scopeLabel}): ${best.session.fileName} row ${best.row.index} (${best.distanceM.toFixed(1)}m from click).`);
+}
+
 function eraseAroundSession(session, latlng, radiusMeters, minChunk) {
   if (!session || session.pointRows.length === 0) return 0;
 
@@ -1291,9 +1113,9 @@ function eraseAround(latlng, options = {}) {
 
 function updateModeIndicators() {
   const eraserOn = Boolean($("eraserMode")?.checked);
-  const inspectorOn = Boolean($("pointInspectorMode")?.checked);
   const editOn = Boolean($("waypointEditMode")?.checked);
   const midpointOn = Boolean($("midpointMode")?.checked);
+  const inspectorOn = Boolean($("pointInspectorMode")?.checked);
 
   const wrap = document.querySelector(".map-wrap");
   const eraserBadge = $("eraserBadge");
@@ -1311,14 +1133,11 @@ function updateModeIndicators() {
   let text = "Normal mode";
   if (editOn && midpointOn) text = "Waypoint edit + midpoint insert";
   else if (editOn) text = "Waypoint edit mode";
+  else if (inspectorOn) text = "Point investigator mode";
   else if (eraserOn) text = "Eraser mode";
 
   if (editOn && eraserOn) {
     text += " (map click tools paused)";
-  }
-
-  if (inspectorOn) {
-    text = "Point inspector mode";
   }
 
   if (modeText) {
@@ -1339,7 +1158,8 @@ async function deleteSelectedSession() {
   if (!ok) return;
 
   try {
-    const response = await fetch(`/api/delete-csv?file=${encodeURIComponent(session.fileName)}`);
+    const sourceQuery = session.source ? `&source=${encodeURIComponent(session.source)}` : "";
+    const response = await fetch(`/api/delete-csv?file=${encodeURIComponent(session.fileName)}${sourceQuery}`);
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
     }
@@ -1350,11 +1170,11 @@ async function deleteSelectedSession() {
     state.sessions = state.sessions.filter((s) => s.id !== session.id);
     state.undoStack = [];
 
-    if (state.sessions.length > 0) {
-      state.selectedId = state.sessions[0].id;
-      state.shouldAutoFit = true;
-    } else {
+    if (state.sessions.length === 0) {
       state.selectedId = null;
+    } else if (state.selectedId === session.id) {
+      state.selectedId = null;
+      state.shouldAutoFit = true;
     }
 
     renderSessionList();
@@ -1373,7 +1193,7 @@ function undoErase() {
   }
 
   restoreRemovedState(snapshot);
-  state.shouldAutoFit = false;
+  state.shouldAutoFit = true;
   renderMeta();
   forceRenderMap();
   setStatus("Undo complete.");
@@ -1407,16 +1227,43 @@ function getCleanedSessionsKey() {
   return "cleanedSessions_v1";
 }
 
-function buildCsvText(session) {
-  const lines = [];
-  lines.push(session.headers.map(escapeCsv).join(","));
-  session.rows.forEach((row) => {
-    lines.push(row.cells.map(escapeCsv).join(","));
-  });
-  return lines.join("\n");
+function isQuotaExceededError(err) {
+  if (!err) return false;
+  return err.name === "QuotaExceededError" || err.code === 22 || /quota/i.test(String(err.message || ""));
 }
 
-async function saveCleanedSession() {
+function persistCleanedSessionsWithPrune(cleanedSessions) {
+  const key = getCleanedSessionsKey();
+  let working = { ...cleanedSessions };
+
+  while (true) {
+    try {
+      localStorage.setItem(key, JSON.stringify(working));
+      return { ok: true, pruned: cleanedSessions && Object.keys(cleanedSessions).length - Object.keys(working).length };
+    } catch (err) {
+      if (!isQuotaExceededError(err)) {
+        return { ok: false, error: err, pruned: 0 };
+      }
+
+      const entries = Object.entries(working);
+      if (entries.length <= 1) {
+        return { ok: false, error: err, pruned: 0, quota: true };
+      }
+
+      entries.sort((a, b) => (Number(a[1]?.timestamp) || 0) - (Number(b[1]?.timestamp) || 0));
+      const [oldestKey] = entries[0];
+      delete working[oldestKey];
+    }
+  }
+}
+
+function setRouteLabVisibility(visible) {
+  const panel = $("routeLabPanel");
+  if (!panel) return;
+  panel.classList.toggle("is-hidden", !visible);
+}
+
+function saveCleanedSession() {
   const session = getSelectedSession();
   if (!session) {
     setStatus("Select a session before saving.", true);
@@ -1424,28 +1271,32 @@ async function saveCleanedSession() {
   }
 
   try {
+    const cleanedSessions = JSON.parse(localStorage.getItem(getCleanedSessionsKey()) || "{}");
+
     const saveAllVisible = Boolean($("eraseAllVisible")?.checked) && state.showAll;
     const targets = saveAllVisible ? state.sessions : [session];
-    const files = targets.map((target) => ({
-      fileName: target.fileName,
-      csvText: buildCsvText(target)
-    }));
-
-    const response = await fetch("/api/save-csv", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ files })
+    targets.forEach((target) => {
+      cleanedSessions[target.fileName] = {
+        headers: target.headers,
+        rows: target.rows,
+        timestamp: Date.now()
+      };
     });
 
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      throw new Error(payload.error || `HTTP ${response.status}`);
+    const saveResult = persistCleanedSessionsWithPrune(cleanedSessions);
+    if (!saveResult.ok) {
+      if (saveResult.quota) {
+        setStatus("Error saving: browser storage is full for cleanedSessions_v1. Use Download cleaned CSV, or save fewer sessions at once.", true);
+        return;
+      }
+      throw saveResult.error;
     }
 
+    const pruneMsg = saveResult.pruned > 0 ? ` (pruned ${saveResult.pruned} older saved session(s) due to storage limit)` : "";
     if (targets.length > 1) {
-      setStatus(`Saved cleaned CSV data for ${targets.length} visible sessions directly to disk.`);
+      setStatus(`Saved cleaned CSV data for ${targets.length} visible sessions. Data persists across refreshes${pruneMsg}.`);
     } else {
-      setStatus(`Cleaned CSV saved for ${session.fileName} directly to disk.`);
+      setStatus(`Cleaned CSV saved for ${session.fileName}. Data persists across page refreshes${pruneMsg}.`);
     }
   } catch (err) {
     setStatus(`Error saving: ${err.message}`, true);
@@ -1453,15 +1304,31 @@ async function saveCleanedSession() {
 }
 
 function loadCleanedSessionIfAvailable() {
-  return false;
+  const session = getSelectedSession();
+  return loadCleanedDataIntoSession(session);
 }
 
 function loadCleanedDataIntoSession(session) {
-  return Boolean(session);
+  if (!session) return false;
+  try {
+    const cleanedSessions = JSON.parse(localStorage.getItem(getCleanedSessionsKey()) || "{}");
+    if (!cleanedSessions[session.fileName]) return false;
+    const cleaned = cleanedSessions[session.fileName];
+    session.headers = cleaned.headers;
+    session.rows = cleaned.rows;
+    rebuildRowIndex(session);
+    rebuildPointRows(session);
+    return true;
+  } catch (err) {
+    console.error("Error loading cleaned session:", err);
+    return false;
+  }
 }
 
 function loadAllCleanedSessionsIfAvailable() {
-  return false;
+  state.sessions.forEach((session) => {
+    loadCleanedDataIntoSession(session);
+  });
 }
 
 function downloadCleanedCsv() {
@@ -1471,7 +1338,13 @@ function downloadCleanedCsv() {
     return;
   }
 
-  const blob = new Blob([buildCsvText(session)], { type: "text/csv;charset=utf-8;" });
+  const lines = [];
+  lines.push(session.headers.map(escapeCsv).join(","));
+  session.rows.forEach((row) => {
+    lines.push(row.cells.map(escapeCsv).join(","));
+  });
+
+  const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
   const link = document.createElement("a");
   const safeName = session.fileName.replace(/\.csv$/i, "") + "_cleaned.csv";
   link.href = URL.createObjectURL(blob);
@@ -1758,26 +1631,41 @@ async function loadSessions() {
   state.sessions = [];
   state.undoStack = [];
   state.shouldAutoFit = true;
+  clearInspectorMarker();
 
-  const CSV_FILES = await getCsvFileList();
+  const CSV_FILES = await getCsvFileList(state.csvSource);
   const skipped = [];
 
-  for (const file of CSV_FILES) {
+  for (const fileEntry of CSV_FILES) {
+    const fileName = typeof fileEntry === "string"
+      ? fileEntry
+      : (fileEntry?.fileName || fileEntry?.urlPath || String(fileEntry || ""));
+    const source = typeof fileEntry === "object" && fileEntry !== null && fileEntry.source
+      ? String(fileEntry.source)
+      : state.csvSource;
+    const sourceFolder = source === "snapped" ? "csv_snapped" : "csv";
+    const fileUrl = typeof fileEntry === "object" && fileEntry !== null && fileEntry.urlPath
+      ? fileEntry.urlPath
+      : `${sourceFolder}/${fileName}`;
+
+    if (!fileName) {
+      continue;
+    }
+
     try {
-      const fileName = typeof file === 'string' ? file : file.fileName;
-      const response = await fetch(`csv/${fileName}`);
+      const response = await fetch(fileUrl);
       if (!response.ok) {
         skipped.push(fileName);
         continue;
       }
 
       const text = await response.text();
-      const session = parseCsv(text, fileName);
+      const session = parseCsv(text, fileName, source);
       if (!state.deletedSessionIds.has(session.id)) {
         state.sessions.push(session);
       }
     } catch {
-      skipped.push(typeof file === 'string' ? file : file.fileName);
+      skipped.push(fileName);
     }
   }
 
@@ -1789,8 +1677,8 @@ async function loadSessions() {
     return;
   }
 
-  if (!state.selectedId || !state.sessions.some((s) => s.id === state.selectedId)) {
-    state.selectedId = state.sessions[0].id;
+  if (state.selectedId && !state.sessions.some((s) => s.id === state.selectedId)) {
+    state.selectedId = null;
   }
 
   loadAllCleanedSessionsIfAvailable();
@@ -1801,7 +1689,8 @@ async function loadSessions() {
   renderMap();
 
   const skippedMsg = skipped.length ? ` Skipped ${skipped.length} missing/unreadable file(s).` : "";
-  setStatus(`Loaded ${state.sessions.length} session file(s).${skippedMsg}`);
+  const sourceLabel = state.csvSource === "snapped" ? "snapped" : "original";
+  setStatus(`Loaded ${state.sessions.length} ${sourceLabel} session file(s).${skippedMsg}`);
 }
 
 async function loadFromPickedFiles(fileList) {
@@ -1833,7 +1722,7 @@ async function loadFromPickedFiles(fileList) {
   }
 
   state.sessions.sort((a, b) => a.fileName.localeCompare(b.fileName));
-  state.selectedId = state.sessions[0].id;
+  state.selectedId = null;
 
   loadAllCleanedSessionsIfAvailable();
 
@@ -1856,6 +1745,11 @@ function initMap() {
   }).addTo(state.map);
 
   state.map.on("click", (event) => {
+    if (state.pointInspectorMode) {
+      inspectNearestPoint(event.latlng);
+      return;
+    }
+
     if (state.waypointEditMode) return;
     if (!$("eraserMode")?.checked) return;
     if (event.originalEvent?.ctrlKey) return; // Ctrl+click: pan, not erase
@@ -1863,36 +1757,12 @@ function initMap() {
     eraseAround(event.latlng);
   });
 
-  // Point inspector: single map-level handler (more efficient than per-polyline handlers)
-  state.map.on("click", (event) => {
-    if (!$("pointInspectorMode")?.checked) return;
-    if (state.waypointEditMode) return;
-    
-    // Defer expensive lookup to avoid blocking event handlers
-    requestAnimationFrame(() => {
-      const selected = getSelectedSession();
-      if (!selected) return;
-      
-      const nearest = findNearestPointInSession(selected, event.latlng);
-      if (!nearest) return;
-      
-      updatePointInspector(selected, nearest.row, event.latlng);
-      showPointPopup(event.latlng, nearest.row);
-      setStatus(`Inspected point ${nearest.row.index + 1} from ${selected.fileName}.`);
-      console.log(`[Inspector] Point ${nearest.row.index + 1} at ${nearest.distanceMeters.toFixed(1)}m from click`);
-    });
-  });
-
   // Drag-to-erase: mousedown starts erasing and disables map dragging
-  // Ctrl+drag or Middle-click+drag: pan the map normally, don't erase
+  // Ctrl+drag: pan the map normally, don't erase
   state.map.on("mousedown", (event) => {
     if (state.waypointEditMode) return;
     if (!$("eraserMode")?.checked) return;
-    
-    // Allow map panning with Ctrl+left-click or middle-click
-    const isMiddleClick = event.originalEvent?.button === 1;
-    const isCtrlClick = event.originalEvent?.ctrlKey;
-    if (isCtrlClick || isMiddleClick) return;
+    if (event.originalEvent?.ctrlKey) return; // Ctrl+drag: allow map panning
 
     const targets = getEraseTargetSessions();
     if (targets.length === 0) return;
@@ -1946,8 +1816,12 @@ function initMap() {
 
 function wireEvents() {
   $("reloadBtn")?.addEventListener("click", loadSessions);
+  $("csvSourceSelect")?.addEventListener("change", (e) => {
+    state.csvSource = e.target.value === "snapped" ? "snapped" : "original";
+    localStorage.setItem("csvSource", state.csvSource);
+    loadSessions();
+  });
   $("undoBtn")?.addEventListener("click", undoErase);
-  $("undoTopBtn")?.addEventListener("click", undoErase);
   $("resetBtn")?.addEventListener("click", resetSelectedSession);
   $("saveCleanedBtn")?.addEventListener("click", saveCleanedSession);
   $("downloadBtn")?.addEventListener("click", downloadCleanedCsv);
@@ -1960,46 +1834,15 @@ function wireEvents() {
   });
 
   $("eraserRadius")?.addEventListener("input", handleRadiusChange);
-  $("eraserMode")?.addEventListener("change", (e) => {
-    if (e.target.checked && $("pointInspectorMode")?.checked) {
-      $("pointInspectorMode").checked = false;
-      updatePointInspector(null, null, null);
-      console.info("[Point Inspector] Disabled because eraser mode was enabled.");
-    }
-    updateModeIndicators();
-  });
+  $("eraserMode")?.addEventListener("change", updateModeIndicators);
   $("pointInspectorMode")?.addEventListener("change", (e) => {
-    if (e.target.checked && $("eraserMode")?.checked) {
-      $("eraserMode").checked = false;
-      console.info("[Eraser] Disabled because point inspector was enabled.");
-    }
-    updatePointInspector(null, null, null);
-    if (e.target.checked) {
-      setStatus("Point inspector mode active. Click a visible route to inspect the nearest GPS point.");
-      console.info("[Point Inspector] Mode enabled.");
-    } else {
-      setStatus("Point inspector mode disabled.");
-      console.info("[Point Inspector] Mode disabled.");
+    state.pointInspectorMode = Boolean(e.target.checked);
+    if (!state.pointInspectorMode) {
+      clearInspectorMarker();
+      const infoBox = $("pointInspectorInfo");
+      if (infoBox) infoBox.textContent = "Point inspector idle. Click on the map to inspect nearest point.";
     }
     updateModeIndicators();
-  });
-
-  $("eraserOverlayBtn")?.addEventListener("click", () => {
-    const eraserCheckbox = $("eraserMode");
-    const nextState = !Boolean(eraserCheckbox?.checked);
-    if (eraserCheckbox) {
-      eraserCheckbox.checked = nextState;
-      eraserCheckbox.dispatchEvent(new Event("change", { bubbles: true }));
-    }
-  });
-
-  $("pointInspectorOverlayBtn")?.addEventListener("click", () => {
-    const inspectorCheckbox = $("pointInspectorMode");
-    const nextState = !Boolean(inspectorCheckbox?.checked);
-    if (inspectorCheckbox) {
-      inspectorCheckbox.checked = nextState;
-      inspectorCheckbox.dispatchEvent(new Event("change", { bubbles: true }));
-    }
   });
 
   $("classSelect")?.addEventListener("change", (e) => {
@@ -2035,6 +1878,10 @@ function wireEvents() {
     state.showVariants = e.target.checked;
     state.shouldAutoFit = false;
     renderMap();
+  });
+
+  $("showRouteLabToggle")?.addEventListener("change", (e) => {
+    setRouteLabVisibility(Boolean(e.target.checked));
   });
 
   $("waypointEditMode")?.addEventListener("change", (e) => {
@@ -2086,25 +1933,6 @@ function wireEvents() {
   $("cloneBaselineBtn")?.addEventListener("click", cloneBaselineToOthers);
   $("resetVariantBtn")?.addEventListener("click", resetSelectedVariant);
   $("snapToVariantBtn")?.addEventListener("click", snapSelectedSessionToVariant);
-
-  document.addEventListener("keydown", (event) => {
-    const target = event.target;
-    const isTypingTarget = Boolean(
-      target && (
-        target.tagName === "INPUT" ||
-        target.tagName === "TEXTAREA" ||
-        target.tagName === "SELECT" ||
-        target.isContentEditable
-      )
-    );
-
-    if (isTypingTarget) return;
-    if (!(event.ctrlKey || event.metaKey) || event.shiftKey || event.altKey) return;
-    if (String(event.key || "").toLowerCase() !== "z") return;
-
-    event.preventDefault();
-    undoErase();
-  });
 }
 
 async function bootstrap() {
@@ -2119,6 +1947,12 @@ async function bootstrap() {
   if (showVariantsToggle) {
     showVariantsToggle.checked = state.showVariants;
   }
+
+  const showRouteLabToggle = $("showRouteLabToggle");
+  if (showRouteLabToggle) {
+    showRouteLabToggle.checked = false;
+  }
+  setRouteLabVisibility(false);
 
   const showTrafficToggle = $("showTrafficToggle");
   if (showTrafficToggle) {
@@ -2136,11 +1970,17 @@ async function bootstrap() {
     $("thresholdValue").textContent = `${Math.round(state.trafficThreshold)}%`;
   }
 
+  const sourceSelect = $("csvSourceSelect");
+  if (sourceSelect) {
+    sourceSelect.value = state.csvSource === "snapped" ? "snapped" : "original";
+  }
+
   initMap();
   wireEvents();
   updateModeIndicators();
   renderRouteStats();
-  startNodeStatusPolling();
+  refreshNodeStatus();
+  setInterval(refreshNodeStatus, 15000);
   loadSessions();
 }
 

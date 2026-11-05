@@ -1,3 +1,1 @@
-Timestamp,Latitude,Longitude,Accuracy(m),Speed(m/s),Bearing(°),Altitude(m),Satellite,Country
-2026-08-24T16:03:46,22.59058333333333,88.48364666666666,2.0,0.0,330.54998779296875,-55.2,Unknown,Unknown
-2026-08-24T16:03:47,22.59058333333333,88.48364666666666,2.0,0.0,330.54998779296875,-55.2,BeiDou,China
+Timestamp,Latitude,Longitude,Accuracy(m),Speed(m/s),Bearing(ï¿½),Altitude(m),Satellite,Country
