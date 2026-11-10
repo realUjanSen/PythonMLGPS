@@ -69,7 +69,7 @@
           <input id="eraserChunk" type="number" min="1" max="50" value="6">
         </div>
         <div class="field-row">
-          <label><input id="eraseAllVisible" type="checkbox" checked> Erase across all visible sessions</label>
+          <label><input id="eraseAllVisible" type="checkbox" checked> Master eraser: affect all visible sessions</label>
         </div>
         <div class="field-row">
           <label><input id="pointInspectorMode" type="checkbox"> Point investigator mode</label>
@@ -81,7 +81,7 @@
           <button id="saveCleanedBtn" type="button">Save cleaned CSV</button>
           <button id="downloadBtn" type="button">Download cleaned CSV</button>
         </div>
-        <p class="small-note">Click or hold-drag on the map in eraser mode to erase points. Hold <strong>Ctrl</strong> while dragging to pan around the map. With "Erase across all visible sessions", one brush pass can clean multiple routes at once.</p>
+        <p class="small-note">Click or hold-drag on the map in eraser mode to erase points. Hold <strong>Ctrl</strong> while dragging to pan around the map. Master eraser mode works without selecting a session and applies one brush pass to all visible routes. Save writes every edited session.</p>
       </section>
 
       <section class="panel">

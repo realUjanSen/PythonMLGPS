@@ -38,6 +38,7 @@ function createDefaultRouteVariants() {
 const state = {
   map: null,
   sessions: [],
+  dirtySessionIds: new Set(),
   csvSource: localStorage.getItem("csvSource") || "original",
   selectedId: null,
   showAll: true,
@@ -934,17 +935,20 @@ function deleteRowsByCsvIndices(session, csvRowIndicesToDelete) {
 
 function getEraseTargetSessions() {
   const selected = getSelectedSession();
-  if (!selected) return [];
-
   const eraseAllVisible = Boolean($("eraseAllVisible")?.checked);
+  if (eraseAllVisible && state.showAll) {
+    return state.sessions.filter((session) => session.pointRows.length > 0);
+  }
+
+  if (!selected) {
+    return [];
+  }
+
   if (!eraseAllVisible || !state.showAll) {
     return [selected];
   }
 
-  return state.sessions.filter((session) => {
-    const segments = getSegments(session);
-    return segments.length > 0;
-  });
+  return [selected];
 }
 
 function clearInspectorMarker() {
@@ -1097,6 +1101,8 @@ function eraseAround(latlng, options = {}) {
   targets.forEach((session) => {
     const erased = eraseAroundSession(session, latlng, radiusMeters, minChunk);
     if (erased > 0) {
+      session.dirty = true;
+      state.dirtySessionIds.add(session.id);
       touchedSessions += 1;
       totalErased += erased;
     }
@@ -1265,14 +1271,14 @@ function setRouteLabVisibility(visible) {
 
 async function saveCleanedSession() {
   const session = getSelectedSession();
-  if (!session) {
-    setStatus("Select a session before saving.", true);
-    return;
-  }
-
   try {
-    const saveAllVisible = Boolean($("eraseAllVisible")?.checked) && state.showAll;
-    const targets = saveAllVisible ? state.sessions : [session];
+    const dirtyTargets = state.sessions.filter((target) => target.dirty || state.dirtySessionIds.has(target.id));
+    const targets = dirtyTargets.length > 0 ? dirtyTargets : (session ? [session] : []);
+    if (targets.length === 0) {
+      setStatus("No edited sessions to save.", true);
+      return;
+    }
+
     const files = targets.map((target) => ({
       fileName: target.fileName,
       csvText: [
@@ -1292,7 +1298,11 @@ async function saveCleanedSession() {
     }
 
     const cleanedSessions = JSON.parse(localStorage.getItem(getCleanedSessionsKey()) || "{}");
-    targets.forEach((target) => delete cleanedSessions[target.fileName]);
+    targets.forEach((target) => {
+      delete cleanedSessions[target.fileName];
+      target.dirty = false;
+      state.dirtySessionIds.delete(target.id);
+    });
     localStorage.setItem(getCleanedSessionsKey(), JSON.stringify(cleanedSessions));
 
     const folderLabel = state.csvSource === "snapped" ? "csv_snapped" : "csv";
@@ -1628,6 +1638,7 @@ async function loadSessions() {
 
   state.deletedSessionIds = new Set(JSON.parse(localStorage.getItem("deletedSessionIds") || "[]"));
   state.sessions = [];
+  state.dirtySessionIds.clear();
   state.undoStack = [];
   state.shouldAutoFit = true;
   clearInspectorMarker();
