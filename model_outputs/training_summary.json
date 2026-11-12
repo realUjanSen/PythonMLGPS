@@ -1,0 +1,83 @@
+{
+  "sessions_used": 175,
+  "morning_sessions": 87,
+  "evening_sessions": 88,
+  "morning_reference": "session_043_20260424_081539_Home_to_Office.csv",
+  "evening_reference": "session_035_20260420_165549_Office_to_Home.csv",
+  "best_model": "xgboost",
+  "metrics": [
+    {
+      "model": "xgboost",
+      "mae_min": 16.185044261368585,
+      "rmse_min": 29.815056368009106,
+      "r2": 0.03920962557471419,
+      "weighted_mae_min": 17.90215682327239,
+      "weighted_rmse_min": 31.589735939825697,
+      "weighted_r2": 0.011968153629706713
+    },
+    {
+      "model": "random_forest",
+      "mae_min": 16.7493701403817,
+      "rmse_min": 31.43879170448966,
+      "r2": -0.06828976274781007,
+      "weighted_mae_min": 18.175429491803754,
+      "weighted_rmse_min": 32.94907742768929,
+      "weighted_r2": -0.07489358137535751
+    },
+    {
+      "model": "hist_gradient_boosting",
+      "mae_min": 17.890726424636288,
+      "rmse_min": 32.346134841803945,
+      "r2": -0.13084259703750467,
+      "weighted_mae_min": 19.730033796861342,
+      "weighted_rmse_min": 34.300227428254956,
+      "weighted_r2": -0.16485790455400484
+    }
+  ],
+  "baseline_test_metrics": [
+    {
+      "model": "random_forest",
+      "mae_min": 0.11696313422725516,
+      "rmse_min": 0.22973543167219276,
+      "r2": 0.9998711840698586,
+      "rows": 1523
+    },
+    {
+      "model": "hist_gradient_boosting",
+      "mae_min": 1.0454798854815988,
+      "rmse_min": 1.335217210496593,
+      "r2": 0.9956487157433079,
+      "rows": 1523
+    },
+    {
+      "model": "xgboost",
+      "mae_min": 1.1079428557321627,
+      "rmse_min": 1.4401393644912597,
+      "r2": 0.9949379940055052,
+      "rows": 1523
+    }
+  ],
+  "outputs": {
+    "model": "model_outputs/eta_model.joblib",
+    "metrics_csv": "model_outputs/model_metrics.csv",
+    "baseline_metrics_csv": "model_outputs/baseline_test_metrics.csv",
+    "training_table_csv": "model_outputs/training_table.csv",
+    "completed_sessions_csv": "model_outputs/sessions_completed_with_imputation.csv",
+    "session_statistics_csv": "model_outputs/session_statistics.csv",
+    "choke_points_csv": "model_outputs/choke_points.csv",
+    "profile_morning_csv": "model_outputs/route_profile_morning.csv",
+    "profile_evening_csv": "model_outputs/route_profile_evening.csv",
+    "training_plots": [
+      "model_outputs/training_metrics.png",
+      "model_outputs/pred_vs_actual.png",
+      "model_outputs/xgboost_learning_curve.png",
+      "model_outputs/hist_gradient_boosting_learning_curve.png",
+      "model_outputs/random_forest_learning_curve.png",
+      "model_outputs/rf_group_learning_curve.png",
+      "model_outputs/rf_learning_curve_raw.json",
+      "model_outputs/residuals_hist.png",
+      "model_outputs/accuracy_details.txt"
+    ],
+    "snapped_csv_dir": "csv_snapped"
+  }
+}

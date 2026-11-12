@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import re
 import zipfile
 from pathlib import Path
 from lxml import etree
@@ -10,8 +11,27 @@ NSMAP = {"w": NS}
 W = f"{{{NS}}}"
 
 ROOT = Path(__file__).resolve().parent
-TEMPLATE = ROOT / "Minor Project Report Template.docx"
-OUTPUT = ROOT / "NTCC_GPS_ETA_Project_Report_Formatted_v2.docx"
+REPORT_PREFIX = "NTCC_GPS_ETA_Project_Report_Formatted"
+
+
+def latest_report_version() -> tuple[Path, int]:
+    candidates = []
+    for path in ROOT.glob(f"{REPORT_PREFIX}_v*.docx"):
+        match = re.search(r"_v(\d+)\.docx$", path.name)
+        if match:
+            candidates.append((int(match.group(1)), path))
+    if candidates:
+        version, path = max(candidates)
+        return path, version
+
+    formatted = ROOT / f"{REPORT_PREFIX}.docx"
+    if formatted.exists():
+        return formatted, 1
+    return ROOT / "Minor Project Report Template.docx", 0
+
+
+TEMPLATE, TEMPLATE_VERSION = latest_report_version()
+OUTPUT = ROOT / f"{REPORT_PREFIX}_v{TEMPLATE_VERSION + 1}.docx"
 
 
 def paragraph_text(paragraph):
@@ -136,6 +156,82 @@ def apply_academic_formatting(root):
     for cell in root.xpath(".//w:body/w:tbl/w:tr/w:tc", namespaces=NSMAP):
         for run in cell.xpath(".//w:r", namespaces=NSMAP):
             set_run_font(run, 22, keep_bold=True)
+
+
+def make_toc_cell(text, alignment):
+    cell = etree.Element(W + "tc")
+    cell_properties = etree.SubElement(cell, W + "tcPr")
+    width = etree.SubElement(cell_properties, W + "tcW")
+    width.set(W + "type", "dxa")
+    width.set(W + "w", "8200" if alignment == "left" else "1000")
+
+    paragraph = etree.SubElement(cell, W + "p")
+    paragraph_properties = etree.SubElement(paragraph, W + "pPr")
+    justification = etree.SubElement(paragraph_properties, W + "jc")
+    justification.set(W + "val", alignment)
+    spacing = etree.SubElement(paragraph_properties, W + "spacing")
+    spacing.set(W + "before", "0")
+    spacing.set(W + "after", "0")
+    spacing.set(W + "line", "240")
+    spacing.set(W + "lineRule", "auto")
+
+    run = etree.SubElement(paragraph, W + "r")
+    text_node = etree.SubElement(run, W + "t")
+    text_node.text = text
+    return cell
+
+
+def convert_table_of_contents(root):
+    body = root.find(f"./{W}body")
+    children = list(body)
+    title_index = next(
+        index
+        for index, child in enumerate(children)
+        if paragraph_text(child) == "TABLE OF CONTENTS"
+    )
+    toc_start = next(
+        index
+        for index in range(title_index + 1, len(children))
+        if paragraph_text(children[index]).strip().startswith("1. INTRODUCTION")
+    )
+    toc_end = next(
+        index
+        for index in range(toc_start, len(children))
+        if paragraph_text(children[index]).strip() == "7.3 Final Thoughts43"
+    )
+
+    toc_paragraphs = [
+        child for child in children[toc_start : toc_end + 1] if child.tag == W + "p"
+    ]
+    table = etree.Element(W + "tbl")
+    table_properties = etree.SubElement(table, W + "tblPr")
+    table_width = etree.SubElement(table_properties, W + "tblW")
+    table_width.set(W + "type", "dxa")
+    table_width.set(W + "w", "9200")
+    layout = etree.SubElement(table_properties, W + "tblLayout")
+    layout.set(W + "type", "fixed")
+    borders = etree.SubElement(table_properties, W + "tblBorders")
+    for edge in ("top", "left", "bottom", "right", "insideH", "insideV"):
+        border = etree.SubElement(borders, W + edge)
+        border.set(W + "val", "nil")
+
+    grid = etree.SubElement(table, W + "tblGrid")
+    for width in ("8200", "1000"):
+        column = etree.SubElement(grid, W + "gridCol")
+        column.set(W + "w", width)
+
+    for paragraph in toc_paragraphs:
+        text = paragraph_text(paragraph).strip()
+        match = re.match(r"^(.*?)(\d+)$", text)
+        if not match:
+            continue
+        row = etree.SubElement(table, W + "tr")
+        row.append(make_toc_cell(match.group(1).rstrip(), "left"))
+        row.append(make_toc_cell(match.group(2), "right"))
+
+    for child in children[toc_start : toc_end + 1]:
+        body.remove(child)
+    body.insert(toc_start, table)
 
 
 paragraph_replacements = {
@@ -451,6 +547,7 @@ def main():
         document = etree.fromstring(source.read("word/document.xml"))
         replace_paragraphs(document, paragraph_replacements, repeated_paragraph_replacements)
         replace_table_cells(document, table_replacements, repeated_table_replacements)
+        convert_table_of_contents(document)
         apply_academic_formatting(document)
         document_xml = etree.tostring(document, xml_declaration=True, encoding="UTF-8", standalone="yes")
 

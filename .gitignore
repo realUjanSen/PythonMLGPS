@@ -9,7 +9,6 @@ node_modules/
 
 # Generated route and model artifacts
 csv_snapped/
-model_outputs/
 
 # Local phone recovery backups
 recovery/
