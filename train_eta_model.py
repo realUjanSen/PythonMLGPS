@@ -1266,17 +1266,34 @@ def main() -> None:
             log_step(f"Checked reuse for sessions: {i}/{total_sessions}", t0)
 
     # Run snapping for tasks, optionally in parallel.
-    if snap_tasks:
+        if snap_tasks:
         log_step(f"Snapping {len(snap_tasks)} sessions (workers={args.workers})", t0)
+        total_snap = len(snap_tasks)
+        snap_start = time.time()
+
+        def report_snap_progress(done: int) -> None:
+            elapsed = time.time() - snap_start
+            pct = 100.0 * done / total_snap
+            remaining = (elapsed / done) * (total_snap - done) if done else float("nan")
+            print(
+                f"Snapping: {done}/{total_snap} ({pct:.1f}%) | "
+                f"elapsed {elapsed / 60:.1f} min | est. remaining {remaining / 60:.1f} min",
+                flush=True,
+            )
+
         if args.workers and args.workers > 1:
             with concurrent.futures.ProcessPoolExecutor(max_workers=args.workers) as ex:
-                for session_id, matched_df in ex.map(match_session_to_reference_worker, snap_tasks):
+                for done, (session_id, matched_df) in enumerate(
+                    ex.map(match_session_to_reference_worker, snap_tasks), start=1
+                ):
                     session_match_map[int(session_id)] = matched_df
+                    report_snap_progress(done)
         else:
             # sequential
-            for payload in snap_tasks:
+            for done, payload in enumerate(snap_tasks, start=1):
                 session_id, matched_df = match_session_to_reference_worker(payload)
                 session_match_map[int(session_id)] = matched_df
+                report_snap_progress(done)
 
     # Second pass: assemble match_rows and metadata in original session order, with progress logging.
     for i, session in enumerate(sessions, start=1):
